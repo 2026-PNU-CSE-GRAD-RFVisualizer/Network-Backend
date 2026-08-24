@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 
 class ParseConfig(NamedTuple):
-    rssi_min: float = -100.0
+    rssi_min: float = -110.0
     rssi_max: float = -10.0
     timestamp_max_skew_ms: int = 600_000
     rssi_filtered_scale: float = 1.0
