@@ -2,15 +2,12 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# 프로젝트 루트 (backend/ 의 상위). 저장 경로의 기준점이다.
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-
 
 def resolve_path(value: str) -> Path:
     """절대 경로면 그대로, 상대 경로면 프로젝트 루트 기준으로 해석한다."""
     path = Path(value).expanduser()
     return path if path.is_absolute() else (PROJECT_ROOT / path)
-
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
@@ -28,7 +25,6 @@ class Settings(BaseSettings):
     enable_realtime: bool = False
 
     window_size_ms: int = 200
-    # 실시간 윈도우 유예(전문가 자문 반영). 수집 지연 p95 보다 크게.
     window_grace_ms: int = 300
     window_flush_interval_ms: int = 50
     node_timeout_seconds: float = 5.0
@@ -42,11 +38,10 @@ class Settings(BaseSettings):
     expected_samples_per_point: int = 30
     rssi_filtered_scale: float = 1.0
 
-    # 최종 실험(Run/TestSegment) 설정
-    test_stabilization_seconds: int = 20    # 위치 도착 후 안정화
-    test_recording_seconds: int = 120       # 위치당 기록(2분)
-    expected_test_points: int = 10          # T1~T10
-    expected_calibration_nodes: int = 4     # C1~C4
+    test_stabilization_seconds: int = 20
+    test_recording_seconds: int = 120
+    expected_test_points: int = 10
+    expected_calibration_nodes: int = 4
 
     handheld_enabled: bool = False
     handheld_udp_host: str = "0.0.0.0"
@@ -54,7 +49,7 @@ class Settings(BaseSettings):
     handheld_stale_ms: int = 500
     handheld_allowed_device_ids: str = "1"
     handheld_allowed_source_ips: str = ""
-    scene_frame_id: str = "experiment-room-v1"
+    scene_frame_id: str = "pnu_3f_corridor_metric_v1"
     handheld_position_source: str = "configured_demo"
     handheld_positions_file: str = "config/handheld_positions.json"
     handheld_active_position: str | None = None
@@ -80,6 +75,5 @@ class Settings(BaseSettings):
     @property
     def export_root_path(self) -> Path:
         return resolve_path(self.export_root)
-
 
 settings = Settings()

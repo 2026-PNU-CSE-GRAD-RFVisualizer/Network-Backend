@@ -1,8 +1,7 @@
 {
-  "frame_id": "experiment-room-v1",
+  "frame_id": "pnu_3f_corridor_metric_v1",
   "active": "demo-1",
   "positions": {
-    "demo-1": {"x": 1.25, "y": 3.40, "z": 1.20, "confidence": 0.9},
-    "demo-2": {"x": 5.00, "y": 2.00, "z": 1.00, "confidence": 0.9}
+    "demo-1": {"x": 21.40, "y": 17.80, "z": 1.60, "confidence": 1.0}
   }
 }
