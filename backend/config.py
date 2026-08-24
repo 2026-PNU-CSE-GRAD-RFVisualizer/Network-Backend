@@ -48,6 +48,31 @@ class Settings(BaseSettings):
     expected_test_points: int = 10          # T1~T10
     expected_calibration_nodes: int = 4     # C1~C4
 
+    handheld_enabled: bool = False
+    handheld_udp_host: str = "0.0.0.0"
+    handheld_udp_port: int = 9200
+    handheld_stale_ms: int = 500
+    handheld_allowed_device_ids: str = "1"
+    handheld_allowed_source_ips: str = ""
+    scene_frame_id: str = "experiment-room-v1"
+    handheld_position_source: str = "configured_demo"
+    handheld_positions_file: str = "config/handheld_positions.json"
+    handheld_active_position: str | None = None
+
+    def _csv_ints(self, value: str) -> set[int]:
+        return {int(v) for v in value.split(",") if v.strip()}
+
+    def _csv_strs(self, value: str) -> set[str]:
+        return {v.strip() for v in value.split(",") if v.strip()}
+
+    @property
+    def handheld_device_id_set(self) -> set[int]:
+        return self._csv_ints(self.handheld_allowed_device_ids)
+
+    @property
+    def handheld_source_ip_set(self) -> set[str]:
+        return self._csv_strs(self.handheld_allowed_source_ips)
+
     @property
     def experiment_data_path(self) -> Path:
         return resolve_path(self.experiment_data_dir)

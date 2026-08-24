@@ -4,7 +4,7 @@ import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
@@ -12,6 +12,7 @@ from .config import PROJECT_ROOT, settings
 from .database import Database
 from .experiment import Conflict, ExperimentManager, compute_device_offsets
 from .export import export_experiment, import_points_csv
+from .handheld_server import HandheldService, load_configured_provider, start_udp_listener
 from .metrics import Metrics
 from .mqtt_bridge import MqttBridge
 from .pages import MEASURE_HTML
@@ -37,11 +38,26 @@ sessions = ExperimentManager(store)
 mqtt_bridge: MqttBridge | None = None
 tasks: list[asyncio.Task] = []
 
+handheld_hub = WebSocketHub()
+handheld_service: HandheldService | None = None
+handheld_transport = None
+
 
 def require_experiment() -> str:
     if sessions.experiment_id is None:
         raise HTTPException(status_code=400, detail="실험이 시작되지 않았습니다.")
     return sessions.experiment_id
+
+
+def resolve_handheld_positions_path() -> Path:
+    p = Path(settings.handheld_positions_file).expanduser()
+    return p if p.is_absolute() else (PROJECT_ROOT / p)
+
+
+def require_handheld() -> HandheldService:
+    if handheld_service is None:
+        raise HTTPException(status_code=409, detail="handheld control 이 비활성화되어 있습니다(handheld_enabled=false).")
+    return handheld_service
 
 
 class ExperimentStart(BaseModel):
@@ -89,6 +105,10 @@ class Assignment(BaseModel):
 
 class PointsCsv(BaseModel):
     csv: str
+
+
+class HandheldActivePosition(BaseModel):
+    name: str
 
 
 class ExportRequest(BaseModel):
@@ -160,12 +180,32 @@ async def lifespan(app: FastAPI):
         logger.info("realtime pipeline enabled (9월 졸업작품 범위)")
     else:
         logger.info("realtime pipeline disabled — 논문 실험 모드")
+
+    global handheld_service, handheld_transport
+    if settings.handheld_enabled:
+        provider = load_configured_provider(
+            resolve_handheld_positions_path(), settings.scene_frame_id,
+            settings.handheld_active_position, settings.handheld_position_source)
+        handheld_service = HandheldService(
+            handheld_hub, provider, settings.scene_frame_id,
+            allowed_device_ids=settings.handheld_device_id_set or None,
+            allowed_source_ips=settings.handheld_source_ip_set or None,
+            stale_ms=settings.handheld_stale_ms)
+        handheld_transport = await start_udp_listener(
+            handheld_service, settings.handheld_udp_host, settings.handheld_udp_port, loop)
+        tasks.append(asyncio.create_task(handheld_service.watch_stale()))
+        logger.info("handheld control enabled — UDP %s:%d, scene=%s",
+                    settings.handheld_udp_host, settings.handheld_udp_port, settings.scene_frame_id)
+    else:
+        logger.info("handheld control disabled")
     try:
         yield
     finally:
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
+        if handheld_transport is not None:
+            handheld_transport.close()
         if mqtt_bridge is not None:
             mqtt_bridge.stop()
         await db.close()
@@ -205,7 +245,49 @@ async def health() -> dict[str, object]:
         "test_stabilization_seconds": settings.test_stabilization_seconds,
         "test_recording_seconds": settings.test_recording_seconds,
         "expected_test_points": settings.expected_test_points,
+        "handheld_enabled": settings.handheld_enabled,
+        "handheld_udp_port": settings.handheld_udp_port if settings.handheld_enabled else None,
     }
+
+
+@app.websocket("/handheld/control")
+async def handheld_control_ws(ws: WebSocket) -> None:
+    await handheld_hub.connect(ws)
+    try:
+        if handheld_service is not None and handheld_service.latest_state() is not None:
+            await handheld_hub.send(ws, handheld_service.latest_state())
+        while True:
+            await ws.receive_text()
+    except WebSocketDisconnect:
+        handheld_hub.disconnect(ws)
+    except Exception:
+        handheld_hub.disconnect(ws)
+
+
+@app.get("/handheld/status")
+async def handheld_status() -> dict:
+    if handheld_service is None:
+        return {"enabled": False}
+    return {"enabled": True, **handheld_service.status()}
+
+
+@app.get("/handheld/positions")
+async def handheld_positions() -> dict:
+    svc = require_handheld()
+    return {"active": getattr(svc.provider, "active", None),
+            "positions": getattr(svc.provider, "names", lambda: [])(),
+            "frame_id": svc.scene_frame_id}
+
+
+@app.post("/handheld/position/active")
+async def handheld_set_active(body: HandheldActivePosition) -> dict:
+    svc = require_handheld()
+    try:
+        svc.provider.set_active(body.name)
+    except (KeyError, AttributeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"active": svc.provider.active}
+
 
 @app.get("/nodes/status")
 async def nodes_status() -> dict[str, object]:
