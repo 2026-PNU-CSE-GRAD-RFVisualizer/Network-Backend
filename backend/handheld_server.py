@@ -1,5 +1,3 @@
-"""Handheld Control v1 UDP 수신 서비스 + Graphics WebSocket 브릿지."""
-
 from __future__ import annotations
 
 import asyncio
@@ -12,44 +10,33 @@ from pathlib import Path
 from .handheld import (
     ControlPacket,
     ControlPacketError,
-    EventDeduper,
     SessionTracker,
     normalized_quaternion,
     parse_control_packet,
 )
-from .position import ConfiguredPositionProvider, PositionProvider, validate_position
+from .position import ConfiguredPositionProvider, PositionProvider
 
 logger = logging.getLogger("handheld")
 
 DEVICE_NAME = {1: "handheld-01"}
 
-
 def now_ms() -> int:
     return int(time.time() * 1000)
 
-
 def _device_name(device_id: int) -> str:
     return DEVICE_NAME.get(device_id, f"device-{device_id}")
-
 
 @dataclass
 class HandheldMetrics:
     received: int = 0
     invalid: int = 0
-    dedup_dropped: int = 0
-    position_accepted: int = 0
-    position_rejected: int = 0
     stale_transitions: int = 0
 
     def snapshot(self) -> dict:
         return {
             "received": self.received, "invalid": self.invalid,
-            "dedup_dropped": self.dedup_dropped,
-            "position_accepted": self.position_accepted,
-            "position_rejected": self.position_rejected,
             "stale_transitions": self.stale_transitions,
         }
-
 
 class HandheldService:
     def __init__(self, hub, provider: PositionProvider, scene_frame_id: str, *,
@@ -62,7 +49,6 @@ class HandheldService:
         self.allowed_device_ids = allowed_device_ids
         self.allowed_source_ips = allowed_source_ips
         self.stale_ms = stale_ms
-        self.dedup = EventDeduper()
         self.sessions = SessionTracker()
         self.metrics = HandheldMetrics()
         self._last_state: dict | None = None
@@ -101,61 +87,24 @@ class HandheldService:
         self._last_valid_ms = now_ms()
         self._stale = False
 
-        is_new_event = False
-        if p.event_flags():
-            is_new_event = self.dedup.is_new(p)
-            if not is_new_event:
-                self.metrics.dedup_dropped += 1
-        recenter_event = is_new_event and p.recenter
-        position_update_event = is_new_event and p.request_position_update
-
-        if position_update_event:
-            await self._apply_position_update(p)
-
-        state = self._build_state(p, recenter_event, position_update_event, stale=False)
+        state = self._build_state(p, stale=False)
         self._last_state = state
         await self.hub.broadcast(state)
 
-    def _build_state(self, p: ControlPacket, recenter_event: bool,
-                     position_update_event: bool, stale: bool) -> dict:
+    def _build_state(self, p: ControlPacket, stale: bool) -> dict:
         qx, qy, qz, qw = normalized_quaternion(p)
         return {
             "type": "handheld_state",
             "device_id": _device_name(p.device_id),
             "session_id": p.session_id,
             "sample_seq": p.sample_seq,
-            "event_seq": p.event_seq,
             "server_timestamp_ms": now_ms(),
             "orientation_valid": p.orientation_valid,
             "quaternion": {"x": qx, "y": qy, "z": qz, "w": qw},
-            "recenter_event": recenter_event,
-            "position_update_event": position_update_event,
+            "teleport_button_held": p.teleport_button_held,
+            "height_cycle_button_held": p.height_cycle_button_held,
             "stale": stale,
         }
-
-    async def _apply_position_update(self, p: ControlPacket) -> None:
-        pos = self.provider.get_latest()
-        ok, reason = validate_position(pos, self.scene_frame_id)
-        if ok and pos is not None:
-            self.metrics.position_accepted += 1
-            msg = {
-                "type": "position_update",
-                "device_id": _device_name(p.device_id),
-                "event_seq": p.event_seq,
-                "accepted": True,
-                "position": pos.to_message(),
-            }
-        else:
-            self.metrics.position_rejected += 1
-            msg = {
-                "type": "position_update",
-                "device_id": _device_name(p.device_id),
-                "event_seq": p.event_seq,
-                "accepted": False,
-                "position": None,
-                "reason": reason,
-            }
-        await self.hub.broadcast(msg)
 
     async def watch_stale(self) -> None:
         interval = max(self.stale_ms / 2000.0, 0.05)
@@ -171,7 +120,6 @@ class HandheldService:
                 self._last_state = st
                 await self.hub.broadcast(st)
 
-
 class _UdpProtocol(asyncio.DatagramProtocol):
     def __init__(self, service: HandheldService, loop: asyncio.AbstractEventLoop) -> None:
         self.service = service
@@ -183,7 +131,6 @@ class _UdpProtocol(asyncio.DatagramProtocol):
     def error_received(self, exc: Exception) -> None:
         logger.debug("udp error: %s", exc)
 
-
 async def start_udp_listener(service: HandheldService, host: str, port: int,
                              loop: asyncio.AbstractEventLoop):
     transport, _ = await loop.create_datagram_endpoint(
@@ -191,11 +138,9 @@ async def start_udp_listener(service: HandheldService, host: str, port: int,
     logger.info("handheld UDP listening on %s:%d", host, port)
     return transport
 
-
 def load_configured_provider(path: str | Path, default_frame_id: str,
                              default_active: str | None = None,
                              source: str = "configured_demo") -> ConfiguredPositionProvider:
-    """JSON 파일에서 시연 좌표를 로드. 파일 없으면 빈 Provider(위치 없음)."""
     p = Path(path)
     if not p.exists():
         logger.warning("handheld positions 파일 없음: %s (위치 미등록)", p)

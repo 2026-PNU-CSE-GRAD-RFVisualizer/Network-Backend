@@ -1,5 +1,3 @@
-"""Handheld Control v1 (RFHC) UDP 52-byte 패킷 파싱·검증·CRC."""
-
 from __future__ import annotations
 
 import math
@@ -16,22 +14,19 @@ _CRC = struct.Struct(">I")
 assert _HEADER.size == 48
 
 FLAG_ORIENTATION_VALID = 1 << 0
-FLAG_REQUEST_POSITION_UPDATE = 1 << 1
-FLAG_RECENTER_ORIENTATION = 1 << 2
+FLAG_TELEPORT_BUTTON_HELD = 1 << 1
+FLAG_HEIGHT_CYCLE_BUTTON_HELD = 1 << 2
 FLAG_TIME_SYNCED = 1 << 3
 RESERVED_MASK = 0xF0
 
 QUAT_NORM_MIN = 0.97
 QUAT_NORM_MAX = 1.03
 
-
 class ControlPacketError(Exception):
     pass
 
-
 def crc32(data: bytes) -> int:
     return zlib.crc32(data) & 0xFFFFFFFF
-
 
 @dataclass
 class ControlPacket:
@@ -50,20 +45,16 @@ class ControlPacket:
     orientation_valid: bool
 
     @property
-    def request_position_update(self) -> bool:
-        return bool(self.flags & FLAG_REQUEST_POSITION_UPDATE)
+    def teleport_button_held(self) -> bool:
+        return bool(self.flags & FLAG_TELEPORT_BUTTON_HELD)
 
     @property
-    def recenter(self) -> bool:
-        return bool(self.flags & FLAG_RECENTER_ORIENTATION)
+    def height_cycle_button_held(self) -> bool:
+        return bool(self.flags & FLAG_HEIGHT_CYCLE_BUTTON_HELD)
 
     @property
     def time_synced(self) -> bool:
         return bool(self.flags & FLAG_TIME_SYNCED)
-
-    def event_flags(self) -> int:
-        return self.flags & (FLAG_REQUEST_POSITION_UPDATE | FLAG_RECENTER_ORIENTATION)
-
 
 def encode_control_packet(*, version: int = VERSION, flags: int = 0, device_id: int = 1,
                           session_id: int = 0, sample_seq: int = 0, event_seq: int = 0,
@@ -72,7 +63,6 @@ def encode_control_packet(*, version: int = VERSION, flags: int = 0, device_id: 
     head = _HEADER.pack(MAGIC, version, flags, PACKET_SIZE, device_id, session_id,
                         sample_seq, event_seq, timestamp_ms, qx, qy, qz, qw)
     return head + _CRC.pack(crc32(head))
-
 
 def parse_control_packet(data: bytes) -> ControlPacket:
     if len(data) != PACKET_SIZE:
@@ -104,33 +94,11 @@ def parse_control_packet(data: bytes) -> ControlPacket:
         qx=qx, qy=qy, qz=qz, qw=qw, quat_norm=norm, orientation_valid=orient_ok,
     )
 
-
 def normalized_quaternion(p: ControlPacket) -> tuple[float, float, float, float]:
     n = p.quat_norm
     if not math.isfinite(n) or n == 0:
         return (0.0, 0.0, 0.0, 1.0)
     return (p.qx / n, p.qy / n, p.qz / n, p.qw / n)
-
-
-class EventDeduper:
-    def __init__(self, max_keys: int = 4096) -> None:
-        self._seen: set[tuple[int, int, int, int]] = set()
-        self._order: list[tuple[int, int, int, int]] = []
-        self._max = max_keys
-
-    def is_new(self, p: ControlPacket) -> bool:
-        ev = p.event_flags()
-        if ev == 0:
-            return False
-        key = (p.device_id, p.session_id, p.event_seq, ev)
-        if key in self._seen:
-            return False
-        self._seen.add(key)
-        self._order.append(key)
-        if len(self._order) > self._max:
-            self._seen.discard(self._order.pop(0))
-        return True
-
 
 @dataclass
 class SessionStats:
@@ -140,7 +108,6 @@ class SessionStats:
     duplicate: int = 0
     out_of_order: int = 0
     last_sample_seq: int | None = None
-
 
 class SessionTracker:
     def __init__(self) -> None:

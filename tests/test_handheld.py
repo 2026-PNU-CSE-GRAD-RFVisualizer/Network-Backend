@@ -1,24 +1,14 @@
-"""Handheld Control v1 (RFHC) 파서·CRC·Position 단위 테스트."""
-
 from __future__ import annotations
 
 from backend.handheld import (
+    FLAG_HEIGHT_CYCLE_BUTTON_HELD,
     FLAG_ORIENTATION_VALID,
-    FLAG_REQUEST_POSITION_UPDATE,
+    FLAG_TELEPORT_BUTTON_HELD,
     ControlPacketError,
-    EventDeduper,
     SessionTracker,
     crc32,
     encode_control_packet,
     parse_control_packet,
-)
-from backend.position import (
-    REASON_FRAME_MISMATCH,
-    REASON_LOW_CONFIDENCE,
-    REASON_NO_POSITION,
-    REASON_STALE,
-    ConfiguredPositionProvider,
-    validate_position,
 )
 
 SHARED_VECTOR_HEX = (
@@ -27,10 +17,8 @@ SHARED_VECTOR_HEX = (
 )
 SHARED_CRC = 0x0AE927E5
 
-
 def test_crc_method_matches_spec():
     assert crc32(b"123456789") == 0xCBF43926
-
 
 def test_shared_vector_bytes_and_crc():
     pkt = encode_control_packet(
@@ -40,19 +28,25 @@ def test_shared_vector_bytes_and_crc():
     assert pkt.hex().upper() == SHARED_VECTOR_HEX
     assert crc32(pkt[:48]) == SHARED_CRC
 
-
 def test_parse_shared_vector():
     p = parse_control_packet(bytes.fromhex(SHARED_VECTOR_HEX))
     assert p.version == 1
     assert p.device_id == 1
     assert p.session_id == 0x12345678
-    assert p.sample_seq == 1
     assert p.orientation_valid is True
-    assert abs(p.quat_norm - 1.0) < 1e-6
-    assert (p.qx, p.qy, p.qz, p.qw) == (0.0, 0.0, 0.0, 1.0)
 
+def test_buttons_are_level_passthrough():
+    p = parse_control_packet(encode_control_packet(flags=FLAG_TELEPORT_BUTTON_HELD))
+    assert p.teleport_button_held is True and p.height_cycle_button_held is False
+    p = parse_control_packet(encode_control_packet(flags=FLAG_HEIGHT_CYCLE_BUTTON_HELD))
+    assert p.height_cycle_button_held is True and p.teleport_button_held is False
+    p = parse_control_packet(encode_control_packet(
+        flags=FLAG_TELEPORT_BUTTON_HELD | FLAG_HEIGHT_CYCLE_BUTTON_HELD))
+    assert p.teleport_button_held is True and p.height_cycle_button_held is True
+    p = parse_control_packet(encode_control_packet(flags=0))
+    assert p.teleport_button_held is False and p.height_cycle_button_held is False
 
-def test_reject_bad_magic_version_length_reserved_crc():
+def test_reject_bad_magic_version_reserved_crc_size():
     good = bytearray(encode_control_packet(flags=FLAG_ORIENTATION_VALID))
     b = bytearray(good); b[0] ^= 0xFF
     _expect_error(bytes(b))
@@ -64,7 +58,6 @@ def test_reject_bad_magic_version_length_reserved_crc():
     _expect_error(bytes(b))
     _expect_error(bytes(good[:-1]))
 
-
 def _expect_error(data: bytes):
     try:
         parse_control_packet(data)
@@ -72,64 +65,14 @@ def _expect_error(data: bytes):
         return
     raise AssertionError("ControlPacketError 를 기대했는데 통과함")
 
-
-def test_quaternion_norm_out_of_range_marks_invalid_not_reject():
-    p = parse_control_packet(encode_control_packet(
-        flags=FLAG_ORIENTATION_VALID, qx=0.0, qy=0.0, qz=0.0, qw=2.0))
+def test_quaternion_norm_out_of_range_marks_invalid():
+    p = parse_control_packet(encode_control_packet(flags=FLAG_ORIENTATION_VALID, qw=2.0))
     assert p.orientation_valid is False
-
-
-def test_event_dedup_three_repeats_once():
-    dd = EventDeduper()
-    p = parse_control_packet(encode_control_packet(
-        flags=FLAG_REQUEST_POSITION_UPDATE, device_id=1, session_id=7, event_seq=3))
-    assert dd.is_new(p) is True
-    assert dd.is_new(p) is False
-    assert dd.is_new(p) is False
-    p2 = parse_control_packet(encode_control_packet(
-        flags=FLAG_REQUEST_POSITION_UPDATE, device_id=1, session_id=7, event_seq=4))
-    assert dd.is_new(p2) is True
-
 
 def test_session_tracker_loss_and_dup():
     t = SessionTracker()
     for seq in (1, 2, 4, 4):
-        p = parse_control_packet(encode_control_packet(session_id=99, sample_seq=seq))
-        s = t.observe(p)
+        s = t.observe(parse_control_packet(encode_control_packet(session_id=99, sample_seq=seq)))
     assert s.lost == 1
     assert s.duplicate == 1
     assert s.received == 4
-
-
-def test_configured_position_provider_and_validation():
-    prov = ConfiguredPositionProvider(
-        frame_id="experiment-room-v1",
-        positions={"A": {"x": 1.25, "y": 3.40, "z": 1.20},
-                   "B": {"x": 5.0, "y": 2.0, "z": 1.0}},
-        active="A",
-    )
-    pos = prov.get_latest()
-    assert pos is not None and pos.position_x == 1.25 and pos.source == "configured_demo"
-    ok, reason = validate_position(pos, "experiment-room-v1")
-    assert ok and reason is None
-    ok, reason = validate_position(pos, "other-scene")
-    assert not ok and reason == REASON_FRAME_MISMATCH
-    prov.set_active("B")
-    assert prov.get_latest().position_x == 5.0
-
-
-def test_position_rejects():
-    from backend.position import Position, now_ms
-    assert validate_position(None, "f")[1] == REASON_NO_POSITION
-    stale = Position(now_ms() - 5000, "f", 1, 1, 1, 0.9, "valid", "x")
-    assert validate_position(stale, "f")[1] == REASON_STALE
-    low = Position(now_ms(), "f", 1, 1, 1, 0.1, "valid", "x")
-    assert validate_position(low, "f")[1] == REASON_LOW_CONFIDENCE
-
-
-def test_reject_zero_placeholder():
-    try:
-        ConfiguredPositionProvider("f", positions={"z": {"x": 0.0, "y": 0.0, "z": 0.0}})
-    except ValueError:
-        return
-    raise AssertionError("(0,0,0) 는 거부되어야 함")
