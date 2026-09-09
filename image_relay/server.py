@@ -164,6 +164,8 @@ class RelayServer:
                 conn.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, self.viewer_sndbuf)
         except OSError:
             pass
+        # 끊긴 뷰어를 TCP 재전송 타임아웃(최대 수십~120초)까지 안 기다리고 빨리 정리한다.
+        conn.settimeout(5.0)
         viewer = Viewer(addr, self.stats)
         with self._viewers_lock:
             self._viewers.add(viewer)

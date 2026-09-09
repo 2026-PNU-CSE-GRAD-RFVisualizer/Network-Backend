@@ -18,6 +18,9 @@ def main() -> None:
                    help="뷰어/핸드헬드가 접속해 프레임을 받는 포트 (기본 9102)")
     p.add_argument("--stats-interval", type=float, default=5.0,
                    help="통계 로그 주기(초) (기본 5)")
+    p.add_argument("--viewer-sndbuf", type=int, default=64 * 1024,
+                   help="뷰어 소켓 송신 버퍼 크기(byte). 작을수록 느린 뷰어의 폐기가 "
+                        "일찍 걸려 지연이 덜 쌓인다 (기본 65536, 0=OS 기본값)")
     p.add_argument("-v", "--verbose", action="store_true", help="디버그 로그")
     args = p.parse_args()
 
@@ -32,6 +35,7 @@ def main() -> None:
         viewer_port=args.viewer_port,
         host=args.host,
         stats_interval=args.stats_interval,
+        viewer_sndbuf=args.viewer_sndbuf,
     )
     logging.getLogger("image_relay").info(
         "중계 서버 시작 — ingest=%d, viewer=%d. Ctrl+C 로 종료.",
