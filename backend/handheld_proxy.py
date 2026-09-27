@@ -1,14 +1,11 @@
 """Handheld 로컬 Proxy (구성 B).
 
-핸드헬드 ESP32-S3 와 같은 로컬 WiFi 의 PC(임베디드 노트북)에서 실행한다.
-ESP32 는 이 PC 의 로컬 IP 로 붙고, Proxy 가 Tailscale 로 원격 허브에 전달한다.
+핸드헬드 ESP32-S3 와 같은 로컬 WiFi 의 PC(임베디드 노트북)에서 실행
+ESP32 는 이 PC 의 로컬 IP
+Proxy 가 Tailscale 로 원격 허브에 전달한다.
 
     핸드헬드 ─UDP 9200─▶ [이 Proxy] ─Tailscale─▶ 허브 Backend 9200
     LCD      ◀─TCP 9102─ [이 Proxy] ◀─Tailscale─ 허브 Relay 9102
-
-실행 예:
-    python handheld_proxy.py --hub 100.85.80.106
-    python handheld_proxy.py --hub book-m8sl7df3oi   # MagicDNS 이름도 가능
 """
 
 from __future__ import annotations
@@ -40,7 +37,6 @@ class _UdpForwarder(asyncio.DatagramProtocol):
             self.count += 1
             if self.count % 200 == 0:
                 logger.info("udp forwarded %d packets → %s:%d", self.count, *self.hub)
-
 
 async def start_udp(hub: str, hub_port: int, listen: str, local_port: int, loop) -> None:
     proto = _UdpForwarder(hub, hub_port)

@@ -1,14 +1,4 @@
-"""성능 측정 스크립트.
 
-노드 수를 늘려가며 부하를 주고, 각 단계마다 백엔드 /metrics 를 읽어
-수집 지연·손실률·프레임 생성 시간을 표(Markdown)로 출력한다.
-
-사용법 (브로커 + 백엔드가 켜져 있어야 함):
-    python benchmark.py
-    python benchmark.py --counts 2,4,8,12,16 --rate 10 --duration 20
-
-결과는 화면에 Markdown 표로 출력되고 benchmark_result.md 로도 저장된다.
-"""
 import argparse
 import json
 import random

@@ -1,9 +1,4 @@
-"""Run / TestSegment 상태 관리자 검증 (3단계). 브로커·FastAPI 없이 실행.
 
-    python tests/test_run_flow.py
-
-상태 규칙(§7.3), 시간 매칭(§3.4), C1~C4 연속 저장, 재측정 supersede, 정/역방향 분리를 검증.
-"""
 
 from __future__ import annotations
 
@@ -14,9 +9,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from backend.experiment import Conflict, ExperimentManager  # noqa: E402
-from backend.experiment import compute_device_offsets  # noqa: E402
-from backend.store import ExperimentStore  # noqa: E402
+from backend.experiment import Conflict, ExperimentManager
+from backend.experiment import compute_device_offsets
+from backend.store import ExperimentStore
 
 
 def _pre_offset(store, mgr):
@@ -40,11 +35,10 @@ def _mgr(tmp):
     store = ExperimentStore(Path(tmp) / "data")
     mgr = ExperimentManager(store)
     mgr.start_experiment("exp1", "aa:bb", 6)
-    # C1~C4 고정 배치 + 이동 센서 T
     for node, pt in [("n1", "C1"), ("n2", "C2"), ("n3", "C3"), ("n4", "C4")]:
         mgr.assign(node, pt, "calibration")
     mgr.assign("nt", "T-move", "test")
-    _pre_offset(store, mgr)   # start_run 이 사전 Offset 을 요구함
+    _pre_offset(store, mgr)
     return store, mgr
 
 
@@ -112,7 +106,7 @@ def test_offset_and_run_are_exclusive():
             mgr.start_run("forward", 1)
         except Conflict:
             mgr.stop_offset_run()
-            mgr.start_run("forward", 1)  # offset 종료 후엔 가능
+            mgr.start_run("forward", 1)
             store.close(); return
         raise AssertionError("Offset 중 Run 시작이 허용됨")
 
@@ -125,13 +119,11 @@ def test_time_matching_calibration_and_test():
         seg = mgr.prepare_test_segment("T1", 1, 20, 120)
         rs, re = seg["recording_started_at_ms"], seg["recording_ended_at_ms"]
 
-        # 안정화 중(기록창 이전): C1 은 저장(run_id 있고 segment_id 없음), T 는 저장 안 함
         c1_before = mgr.context_at("n1", rs - 5000)
         assert c1_before is not None and c1_before["run_id"] and c1_before["segment_id"] is None
         assert c1_before["point_role"] == "calibration"
-        assert mgr.context_at("nt", rs - 5000) is None  # 이동·안정화 중 T 제외
+        assert mgr.context_at("nt", rs - 5000) is None
 
-        # 기록창 안: C1 과 T 모두 같은 segment_id
         mid = (rs + re) // 2
         c1_in = mgr.context_at("n1", mid)
         t_in = mgr.context_at("nt", mid)
@@ -139,10 +131,9 @@ def test_time_matching_calibration_and_test():
         assert t_in["point_role"] == "test" and t_in["point_id"] == "T1"
         assert c1_in["point_id"] == "C1"
 
-        # 종료 시각 정각: [start, end) 규칙으로 제외
         assert mgr.context_at("nt", re) is None
         c1_after = mgr.context_at("n1", re)
-        assert c1_after is not None and c1_after["segment_id"] is None  # C1 은 계속 저장
+        assert c1_after is not None and c1_after["segment_id"] is None
         store.close()
 
 
@@ -151,12 +142,11 @@ def test_delayed_sample_still_matches_segment_by_time():
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         store, mgr = _mgr(tmp)
         mgr.start_run("forward", 1)
-        seg = mgr.prepare_test_segment("T1", 1, 0, 2)   # 안정화 0, 기록 2s
+        seg = mgr.prepare_test_segment("T1", 1, 0, 2)
         mid = (seg["recording_started_at_ms"] + seg["recording_ended_at_ms"]) // 2
         time.sleep(2.1)
-        fin = mgr.auto_advance_segment()                # 자연 종료(창 절단 없음)
+        fin = mgr.auto_advance_segment()
         assert fin is not None and mgr.active_test_segment() is None
-        # 활성 포인터는 없지만 시간 범위로 판정되어야 한다
         t_delayed = mgr.context_at("nt", mid)
         assert t_delayed is not None and t_delayed["segment_id"] == seg["segment_id"]
         store.close()
@@ -167,13 +157,12 @@ def test_early_stop_truncates_recording_window():
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         store, mgr = _mgr(tmp)
         mgr.start_run("forward", 1)
-        seg = mgr.prepare_test_segment("T1", 1, 0, 120)  # 계획 2분
+        seg = mgr.prepare_test_segment("T1", 1, 0, 120)
         orig_end = seg["recording_ended_at_ms"]
         time.sleep(0.2)
-        mgr.finish_test_segment()                        # 조기 종료
+        mgr.finish_test_segment()
         row = store.get_test_segment(seg["segment_id"])
-        assert row["recording_ended_at_ms"] < orig_end   # 창이 줄었다
-        # 원래 창 후반(mid) 시각의 T 샘플은 이제 이 Segment 에 안 붙는다
+        assert row["recording_ended_at_ms"] < orig_end
         mid = (seg["recording_started_at_ms"] + orig_end) // 2
         assert mgr.context_at("nt", mid) is None
         store.close()
@@ -184,12 +173,11 @@ def test_remeasure_supersedes_only_that_point():
         store, mgr = _mgr(tmp)
         mgr.start_run("forward", 1)
         s1 = mgr.prepare_test_segment("T4", 4, 20, 120)
-        mgr.discard_test_segment()               # T4 attempt1 폐기
-        s2 = mgr.prepare_test_segment("T4", 4, 20, 120)  # attempt2
+        mgr.discard_test_segment()
+        s2 = mgr.prepare_test_segment("T4", 4, 20, 120)
         assert s2["attempt_index"] == 2
         seg1 = store.get_test_segment(s1["segment_id"])
         assert seg1["superseded"] == 1 and seg1["status"] == "discarded"
-        # 폐기된 구간 시간대는 segment 매칭에서 제외, 새 구간만 유효
         mid2 = (s2["recording_started_at_ms"] + s2["recording_ended_at_ms"]) // 2
         assert mgr.context_at("nt", mid2)["segment_id"] == s2["segment_id"]
         store.close()
@@ -210,7 +198,6 @@ def test_forward_and_reverse_are_separate_runs():
         runs = store.list_runs("exp1")
         dirs = sorted(r["direction"] for r in runs)
         assert dirs == ["forward", "reverse"]
-        # 정방향 T1 과 역방향 T1 은 서로 다른 run_id 의 별도 Segment
         fwd_segs = store.list_test_segments(fwd)
         rev_segs = store.list_test_segments(rev)
         assert len(fwd_segs) == 1 and len(rev_segs) == 1
@@ -227,7 +214,7 @@ if __name__ == "__main__":
         try:
             t()
             print(f"PASS {t.__name__}")
-        except Exception:  # noqa: BLE001
+        except Exception:
             failed += 1
             print(f"FAIL {t.__name__}")
             traceback.print_exc()

@@ -7,4 +7,4 @@ if (Test-Path ".\.venv\Scripts\python.exe") {
 } else {
     $py = "python"
 }
-& $py .\dev_mqtt_broker.py
+& $py .\scripts\dev_mqtt_broker.py

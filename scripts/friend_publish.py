@@ -1,12 +1,4 @@
-"""친구 노트북에서 주호의 broker로 RSSI 데이터를 보내는 테스트 스크립트.
 
-준비물:
-  1) Python 설치
-  2) pip install paho-mqtt
-실행:
-  python friend_publish.py
-같은 WiFi(같은 공유기)에 있어야 하고, 주호 쪽 broker/백엔드가 켜져 있어야 함.
-"""
 import json
 import time
 

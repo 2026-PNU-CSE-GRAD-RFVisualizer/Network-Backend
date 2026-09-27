@@ -6,17 +6,27 @@ RFVisualizer 프로젝트의 **네트워크/백엔드 파트** (논문용 저장
 현재 기본 모드는 **논문 실험** (`ENABLE_REALTIME=false`).
 실시간 시각화 경로는 `backend/realtime/` 에 격리되어 있고 플래그로 켠다.
 
+## 저장소 구조
+
+- `backend/` — FastAPI 백엔드(수집·검증·저장·Export), `realtime/` 에 실시간 경로 격리
+- `image_relay/` — 영상 중계 서버
+- `scripts/` — 실행·도구 스크립트(개발용 브로커, sniff, 발행·전송, 부하·리허설 등)
+- `tests/` — 단위 테스트
+- `docs/` — 문서(`AGENTS.md`, `TESTING.md`, `RUN_EXPERIMENT.md` 등)
+- `images/` — 테스트용 샘플 이미지
+- `config/`, `db/`, `mosquitto/` — 설정·스키마
+
 ## 문서
 
 파트 경계·데이터 계약·실험 모델·프로젝트 배경은 이 저장소에 중복 기재하지 않는다.
 
-- 작업 규칙: 이 저장소 루트의 `AGENTS.md`
+- 작업 규칙: 이 저장소의 `docs/AGENTS.md`
 - 중앙 문서: [`RFVisualizer-Docs`](https://github.com/2026-PNU-CSE-GRAD-RFVisualizer/RFVisualizer-Docs) (권장 로컬 위치 `../RFVisualizer-Docs`)
   - `PROJECT.md` — 목표, 파트 책임
   - `CURRENT_STATUS.md` — 구현 상태, 실시간 모드
   - `INTERFACE.md` — MQTT·RSSI·좌표·Export 계약
   - `network/NETWORK.md` — 백엔드 구조, 실험 모델
-- 측정 절차·테스트 상세: 이 저장소의 `TESTING.md`
+- 측정 절차·테스트 상세: 이 저장소의 `docs/TESTING.md`
 
 ## 설치 (한 번만)
 
@@ -33,15 +43,13 @@ Copy-Item .env.example .env         # 없으면 자동 생성됨
 
 ## 실행
 
-### 1. MQTT 브로커 — A 또는 B 택1
+### 1. MQTT 브로커
 
 ```powershell
-# A. Docker (PostgreSQL 포함)
-docker compose up -d
-
-# B. 개발용 브로커만 (DB 없음)
 .\run_dev_mqtt_broker.ps1
 ```
+
+> 논문 실험 모드에서는 개발용 MQTT 브로커와 SQLite 만 사용한다. Docker/PostgreSQL 경로는 실제 실험에 사용하지 않았다.
 
 ### 2. 백엔드 (새 터미널)
 
@@ -74,7 +82,7 @@ docker compose up -d
 | `GET /experiment/download/{which}` | raw / summary / calibration / test |
 
 > 구 `POST /session/start` `/stop`, `GET /session/current` 는 **제거되어 HTTP 410 Gone** 을 반환한다.
-> 자세한 흐름은 `RUN_EXPERIMENT.md` 참고.
+> 자세한 흐름은 `docs/RUN_EXPERIMENT.md` 참고.
 
 `ENABLE_REALTIME=true` 일 때만 `GET /position/latest`, `WS /frames` 가 추가된다.
 
@@ -84,7 +92,6 @@ docker compose up -d
 |---|---|---|
 | JSONL 원본 | `data/ingest_raw.jsonl` | 수신한 모든 메시지. 파싱 실패해도 남는다 |
 | SQLite | `data/experiment.db` | 실험 데이터의 기준. 파일 하나를 그대로 백업 |
-| Postgres | (선택) | 실시간 프레임 경로. 실험 결과의 기준이 아님 |
 
 ## Export 산출물 (`experiments/<experiment_id>/`)
 
@@ -114,11 +121,11 @@ py -m pytest -q                                     # 전체 단위 테스트
 브로커가 떠 있으면 실제 MQTT 경로까지 포함한 리허설:
 
 ```powershell
-python .\rehearsal.py --seconds 2   # 압축 실행
-python .\rehearsal.py               # 30초 × 20위치, 실제와 동일
+python .\scripts\rehearsal.py                    # 압축 실행 (기본: 안정화 0s, 기록 2s)
+python .\scripts\rehearsal.py --stab 20 --rec 120  # 실제 타이밍(느림)
 ```
 
-측정 절차와 단계별 테스트 상세는 `TESTING.md` 참조.
+측정 절차와 단계별 테스트 상세는 `docs/TESTING.md` 참조.
 
 ## 방화벽 (ESP32/타 PC 접속 시, 관리자 PowerShell)
 

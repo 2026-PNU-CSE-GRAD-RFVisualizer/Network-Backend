@@ -16,9 +16,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from backend.experiment import ExperimentManager, compute_device_offsets  # noqa: E402
-from backend.export import export_experiment  # noqa: E402
-from backend.store import ExperimentStore  # noqa: E402
+from backend.experiment import ExperimentManager, compute_device_offsets
+from backend.export import export_experiment
+from backend.store import ExperimentStore
 
 NODES = ["n1", "n2", "n3", "n4", "nt"]
 BIAS = {"n1": 1.8, "n2": -2.4, "n3": 0.6, "n4": -1.1, "nt": 3.2}
@@ -60,7 +60,6 @@ def _build(tmp):
     mgr = ExperimentManager(store)
     mgr.start_experiment("exp1", "aa:bb", 6)
 
-    # offset
     for n in NODES:
         mgr.assign(n, "offset-00", "offset")
     off = mgr.start_offset_run()
@@ -71,7 +70,6 @@ def _build(tmp):
     mgr.stop_offset_run()
     compute_device_offsets(store, "exp1", offset_run_id=off["offset_run_id"])
 
-    # 좌표 등록 (T1~T3, C1~C4) + TX
     for n, pt in [("n1", "C1"), ("n2", "C2"), ("n3", "C3"), ("n4", "C4")]:
         mgr.assign(n, pt, "calibration")
         store.upsert_point("exp1", pt, "calibration", 1.0, 1.0, 0.8, None, t)
@@ -80,16 +78,14 @@ def _build(tmp):
         store.upsert_point("exp1", tp, "test", float(i), 2.0, 0.8, None, t)
     store.upsert_tx("exp1", "tx-01", 7.7, 1.5, 1.2, 2_400_000_000, "aa:bb", 6, None)
 
-    # forward run: T1(완료), T2(폐기 후 재측정), T3(완료).
-    # 실제로는 T 가 물리적으로 이동해 창이 겹치지 않는다. 압축 테스트에서는 sleep 으로 재현.
     mgr.start_run("forward", 1)
     _fill_segment(store, mgr, mgr.prepare_test_segment("T1", 1, 0, 1)); mgr.finish_test_segment()
     time.sleep(1.1)
 
     bad = mgr.prepare_test_segment("T2", 2, 0, 1)
-    _fill_segment(store, mgr, bad); mgr.discard_test_segment()          # 폐기
+    _fill_segment(store, mgr, bad); mgr.discard_test_segment()
     good = mgr.prepare_test_segment("T2", 2, 0, 1)
-    _fill_segment(store, mgr, good); mgr.finish_test_segment()          # 재측정
+    _fill_segment(store, mgr, good); mgr.finish_test_segment()
     time.sleep(1.1)
 
     _fill_segment(store, mgr, mgr.prepare_test_segment("T3", 3, 0, 1)); mgr.finish_test_segment()
@@ -104,22 +100,19 @@ def test_export_files_and_contents():
                                 expected_samples=3, expected_test_points=3)
         root = Path(out["path"])
 
-        # 파일 존재
         for rel in ["processed/test_points.csv", "processed/calibration_by_test_window.csv",
                     "processed/calibration_points.csv", "config/runs.json",
                     "config/test_segments.json", "raw/measurements_raw.csv"]:
             assert (root / rel).exists(), f"{rel} 없음"
 
         tp = _read_csv(root / "processed" / "test_points.csv")
-        # T1, T2(재측정), T3 = 3행. 폐기된 T2 attempt1 은 제외
         assert len(tp) == 3, [r["point_id"] for r in tp]
         assert sorted(r["point_id"] for r in tp) == ["T1", "T2", "T3"]
         assert all(r["direction"] == "forward" and r["run_id"] and r["segment_id"] for r in tp)
-        assert bad_seg["segment_id"] not in {r["segment_id"] for r in tp}   # 폐기 제외
+        assert bad_seg["segment_id"] not in {r["segment_id"] for r in tp}
         t2 = next(r for r in tp if r["point_id"] == "T2")
         assert t2["segment_id"] == good_seg["segment_id"] and t2["attempt_index"] == "2"
 
-        # calibration_by_test_window: 완료 Segment 3개 × C1~C4 = 12행, 창이 test 와 동일
         cw = _read_csv(root / "processed" / "calibration_by_test_window.csv")
         assert len(cw) == 12, len(cw)
         by_seg = {}
@@ -127,12 +120,10 @@ def test_export_files_and_contents():
             by_seg.setdefault(r["segment_id"], set()).add(r["calibration_point_id"])
         for seg_id, cals in by_seg.items():
             assert cals == {"C1", "C2", "C3", "C4"}
-        # 같은 segment 의 test 와 calibration 창 시각 일치
         tp_by_seg = {r["segment_id"]: r for r in tp}
         for r in cw:
             assert r["window_started_at_ms"] == tp_by_seg[r["segment_id"]]["recording_started_at_ms"]
 
-        # QC 통과
         assert out["qc"]["ok"], out["qc"]["problems"]
         store.close()
 
@@ -160,7 +151,7 @@ def test_qc_fails_when_calibration_missing():
         mgr.start_run("forward", 1)
         seg = mgr.prepare_test_segment("T1", 1, 0, 2)
         rs = seg["recording_started_at_ms"]
-        for k in range(3):                       # T 만 저장, C1~C4 는 저장하지 않음
+        for k in range(3):
             ingest(store, mgr, "nt", rs + k * 300, BASE + BIAS["nt"])
         mgr.finish_test_segment()
 
@@ -180,7 +171,7 @@ if __name__ == "__main__":
         try:
             t()
             print(f"PASS {t.__name__}")
-        except Exception:  # noqa: BLE001
+        except Exception:
             failed += 1
             print(f"FAIL {t.__name__}")
             traceback.print_exc()

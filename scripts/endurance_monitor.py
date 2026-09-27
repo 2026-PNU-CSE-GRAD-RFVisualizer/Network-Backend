@@ -1,18 +1,3 @@
-"""장시간 내구 시험 모니터 (전문가 자문 반영).
-
-2분대(708건) 시험에서는 손실률 추세나 장시간 장애가 드러나지 않는다는 지적에 따라,
-실행 중인 백엔드의 /metrics · /nodes/status · /health 를 주기적으로 폴링해
-시계열 CSV(순번 손실·재연결·수집지연·노드 상태)를 기록한다.
-
-30분 이상 연속 측정하면서 실행:
-    python endurance_monitor.py --duration 1800 --interval 10
-
-브로커·백엔드·부하 시뮬레이터를 띄운 뒤 함께 돌리면 된다:
-    python load_test.py --nodes 5 --rate 1 --duration 1800
-
-주의: ESP32 heap 잔량은 임베디드 파트가 기록해야 한다(백엔드에서 관측 불가).
-백엔드 쪽 장시간 장애 지표(손실률 추세·재연결·수집지연 발산)는 이 도구가 담당한다.
-"""
 
 from __future__ import annotations
 
@@ -75,7 +60,7 @@ def poll_once(base: str, elapsed_s: int) -> dict[str, Any]:
         nodes = _get(f"{base}/nodes/status").get("nodes", [])
         health = _get(f"{base}/health")
         return build_row(elapsed_s, metrics, nodes, health, ok=True)
-    except Exception as exc:  # noqa: BLE001 — 장시간 시험 중 순단은 기록하고 계속
+    except Exception as exc:
         row = build_row(elapsed_s, {}, [], {}, ok=False)
         row["timestamp"] = f"{time.strftime('%Y-%m-%d %H:%M:%S')} (fetch 실패: {exc})"
         return row
@@ -105,7 +90,7 @@ def main() -> None:
             elapsed = int(time.time() - start)
             row = poll_once(base, elapsed)
             writer.writerow(row)
-            f.flush()  # 중간에 죽어도 기록이 남게
+            f.flush()
 
             if not row["ok"]:
                 fetch_fails += 1

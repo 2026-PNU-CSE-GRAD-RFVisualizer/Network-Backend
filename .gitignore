@@ -20,7 +20,7 @@ logs/
 .idea/
 .vscode/
 
+# Data & experiment outputs
 data/
 experiments/
 frames_out/
-__pycache__/

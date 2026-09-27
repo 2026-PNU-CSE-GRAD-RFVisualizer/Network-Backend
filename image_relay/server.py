@@ -1,10 +1,4 @@
-"""JPEG 프레임 중계 서버 (측정 백엔드와 별개 프로세스).
 
-    Graphics ─TCP(ingest)─▶ [ RelayServer ] ─TCP(viewer)─▶ Handheld / Viewer(들)
-
-핵심: 뷰어별 큐는 1칸. 느린 뷰어가 밀리면 오래된 프레임을 버리고 최신만 유지한다
-(지연 무한 누적·타 뷰어 블로킹 방지). producer/viewer 재접속 자유.
-"""
 
 from __future__ import annotations
 
@@ -83,7 +77,6 @@ class RelayServer:
         self.viewer_port = viewer_port
         self.host = host
         self.stats_interval = stats_interval
-        # 송신 버퍼가 작을수록 느린 뷰어의 폐기가 일찍 걸려 지연이 덜 쌓인다. 0=OS 기본.
         self.viewer_sndbuf = viewer_sndbuf
 
         self.stats = Stats()
@@ -100,7 +93,6 @@ class RelayServer:
         for v in targets:
             v.offer(frame_bytes)
 
-    # -- ingest: 그래픽스 수신 -------------------------------------------
     def _serve_ingest(self) -> None:
         srv = _listen(self.host, self.ingest_port)
         self._ingest_sock = srv
@@ -142,7 +134,6 @@ class RelayServer:
                 self.stats.producers -= 1
             logger.info("producer disconnected: %s", addr)
 
-    # -- viewer: 뷰어 fanout --------------------------------------------
     def _serve_viewers(self) -> None:
         srv = _listen(self.host, self.viewer_port)
         self._viewer_sock = srv
@@ -157,14 +148,12 @@ class RelayServer:
 
     def _handle_viewer(self, conn: socket.socket, addr: tuple[str, int]) -> None:
         logger.info("viewer connected: %s", addr)
-        # 지연 최소화: Nagle off + 송신 버퍼 축소
         try:
             conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             if self.viewer_sndbuf > 0:
                 conn.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, self.viewer_sndbuf)
         except OSError:
             pass
-        # 끊긴 뷰어를 TCP 재전송 타임아웃(최대 수십~120초)까지 안 기다리고 빨리 정리한다.
         conn.settimeout(5.0)
         viewer = Viewer(addr, self.stats)
         with self._viewers_lock:
@@ -175,7 +164,7 @@ class RelayServer:
             while not self._stop.is_set():
                 frame_bytes = viewer.get(timeout=1.0)
                 if frame_bytes is None:
-                    continue  # 새 프레임 대기 (끊김 감지 위해 주기적으로 루프)
+                    continue
                 try:
                     conn.sendall(frame_bytes)
                 except OSError:

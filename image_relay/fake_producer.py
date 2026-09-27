@@ -1,7 +1,4 @@
-"""테스트용 가짜 그래픽스 producer. Pillow 있으면 실제 JPEG, 없으면 합성 바이트.
 
-    python -m image_relay.fake_producer --fps 10 --count 40
-"""
 
 from __future__ import annotations
 
@@ -13,14 +10,13 @@ import time
 from .protocol import encode_frame
 
 try:
-    from PIL import Image, ImageDraw  # type: ignore
+    from PIL import Image, ImageDraw
     _HAS_PIL = True
-except Exception:  # noqa: BLE001
+except Exception:
     _HAS_PIL = False
 
 
 def make_jpeg(seq: int, w: int = 800, h: int = 480) -> bytes:
-    # 기본 800x480 = 임베디드 디스플레이 패널 해상도
     if _HAS_PIL:
         img = Image.new("RGB", (w, h), (20, 30 + (seq * 7) % 200, 60))
         d = ImageDraw.Draw(img)
@@ -31,7 +27,7 @@ def make_jpeg(seq: int, w: int = 800, h: int = 480) -> bytes:
         img.save(buf, format="JPEG", quality=70)
         return buf.getvalue()
     body = bytes((seq * 13 + i) % 256 for i in range(8000 + (seq % 40) * 100))
-    return b"\xff\xd8\xff\xe0" + body + b"\xff\xd9"  # 더미 JPEG 마커 + 바디
+    return b"\xff\xd8\xff\xe0" + body + b"\xff\xd9"
 
 
 def main() -> None:

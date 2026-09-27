@@ -10,9 +10,9 @@
 관리자·저장소를 직접 구동하므로(브로커/HTTP 없이) 로직·시간매칭·Export 를 검증한다.
 가상 노드에 알려진 편차를 심어 두고 백엔드가 복원하는지 확인한다.
 
-    python rehearsal.py                 # 압축(기본): 안정화 0s, 기록 2s
-    python rehearsal.py --reverse       # 역방향 Run 도 실행
-    python rehearsal.py --stab 20 --rec 120   # 실제 타이밍(느림)
+    python scripts/rehearsal.py                 # 압축(기본): 안정화 0s, 기록 2s
+    python scripts/rehearsal.py --reverse       # 역방향 Run 도 실행
+    python scripts/rehearsal.py --stab 20 --rec 120   # 실제 타이밍(느림)
 """
 
 from __future__ import annotations
@@ -24,11 +24,11 @@ import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from backend.experiment import ExperimentManager, compute_device_offsets  # noqa: E402
-from backend.export import export_experiment  # noqa: E402
-from backend.store import ExperimentStore  # noqa: E402
+from backend.experiment import ExperimentManager, compute_device_offsets
+from backend.export import export_experiment
+from backend.store import ExperimentStore
 
 ROOM_W, ROOM_D = 15.4, 10.8
 AP_POS = (7.7, 1.5, 1.20)
@@ -82,7 +82,6 @@ def main() -> int:
     mgr.start_experiment(exp, "aa:bb:cc:dd:ee:01", 6)
     print(f"[리허설] experiment={exp}  stab={args.stab}s rec={args.rec}s reverse={args.reverse}")
 
-    # 1. Offset: 5대 공동 배치
     for n in ALL_NODES:
         mgr.assign(n, "offset-00", "offset")
     off = mgr.start_offset_run()
@@ -97,7 +96,6 @@ def main() -> int:
                  for o in res["nodes"])
     print(f"[1] Offset 계산: {'복원 OK' if ok_off else '복원 실패'} ({len(res['nodes'])}대)")
 
-    # 2. 역할 배정 + 좌표 + TX
     for n, pt in CAL_NODES.items():
         mgr.assign(n, pt, "calibration")
         store.upsert_point(exp, pt, "calibration", *CAL_POS[pt], None, t)
@@ -112,10 +110,8 @@ def main() -> int:
         seq = list(TEST_POS) if direction == "forward" else list(reversed(TEST_POS))
         for order, tp in enumerate(seq, start=1):
             seg = mgr.prepare_test_segment(tp, order, args.stab, args.rec)
-            # 안정화 구간: C1~C4 는 이동 데이터로 저장(segment 없음), T 는 제외
             if args.stab > 0:
                 ingest(store, mgr, "node1", seg["recording_started_at_ms"] - 500, CAL_POS["C1"])
-            # 기록 구간: 실제 rate 로 발행 (compressed 면 몇 개만)
             rs, re = seg["recording_started_at_ms"], seg["recording_ended_at_ms"]
             n_samples = max(3, int(args.rec * args.rate))
             for k in range(n_samples):
@@ -126,19 +122,16 @@ def main() -> int:
                     ingest(store, mgr, n, ts, CAL_POS[CAL_NODES[n]])
                 ingest(store, mgr, MOVING, ts, TEST_POS[tp])
             mgr.finish_test_segment()
-            time.sleep(args.rec + 0.2)   # 다음 위치 창이 겹치지 않도록(실제론 물리 이동)
+            time.sleep(args.rec + 0.2)
             print(f"    {direction} {tp} (order {order}) 기록 완료")
         mgr.end_run()
 
-    # 3. forward Run
     print("[3] forward Run")
     run_pass("forward", 1)
-    # 4. reverse Run (선택)
     if args.reverse:
         print("[4] reverse Run")
         run_pass("reverse", 2)
 
-    # 5. 사후(post) Offset 측정 — 실험 전후 편차 변화(drift) 확인용(재보정 아님)
     post = mgr.start_offset_run("post")
     t2 = int(time.time() * 1000)
     for i in range(30):
@@ -149,7 +142,6 @@ def main() -> int:
     mgr.attach_post_offset(post["offset_run_id"])
     print(f"[5] 사후 Offset 측정·계산 (drift 확인용)")
 
-    # 6. Export + QC
     out_root = tmp / "experiments"
     result = export_experiment(store, exp, out_root,
                                expected_samples=max(3, int(args.rec * args.rate)),

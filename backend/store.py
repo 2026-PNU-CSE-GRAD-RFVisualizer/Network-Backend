@@ -1,12 +1,4 @@
-"""논문 실험 데이터 저장소.
 
-설계 원칙 (계획서 §12 "Backend 저장 실패" 대응):
-  1. 수신한 모든 JSON 줄을 즉시 JSONL 파일에 append 한다. 어떤 단계가 실패해도 원본은 남는다.
-  2. 실험 데이터는 SQLite 파일에 저장한다. Docker/Postgres 가 없어도 7/23 현장 측정이 가능하다.
-  3. 기존 Postgres 실시간 경로는 그대로 병행 동작하되, 실험 결과의 기준(source of truth)은 아니다.
-
-SQLite 는 5노드 × 1Hz 수준의 부하에서 충분하며, 파일 하나를 그대로 백업/전달할 수 있다.
-"""
 
 from __future__ import annotations
 
@@ -21,9 +13,6 @@ logger = logging.getLogger(__name__)
 
 SCHEMA_PATH = Path(__file__).resolve().parent.parent / "db" / "schema_experiment.sql"
 
-# 스키마 버전. 올릴 때마다 _migrate 에 v(N-1)->vN 절을 추가한다.
-#   1: measurement 에 run_id / segment_id, experiment_run / test_segment 추가
-#   2: offset_run 테이블, device_offset 을 (offset_run_id, node_id) 키로, experiment_run pre/post
 SCHEMA_VERSION = 2
 
 
@@ -38,8 +27,6 @@ class ExperimentStore:
         self._jsonl_lock = threading.Lock()
         self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
-        # fresh DB: 스키마가 모든 테이블/열을 만든다. 기존 DB: IF NOT EXISTS 라 신규 열은 안 생기므로
-        # _migrate 가 ALTER 로 채운다. 순서상 executescript(신규 테이블 생성) 후 마이그레이션.
         self._conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
         self._conn.commit()
         self._migrate()
@@ -60,18 +47,15 @@ class ExperimentStore:
             return col in {r[1] for r in c.execute(f"PRAGMA table_info({table})").fetchall()}
 
         if version < 1:
-            # v0 -> v1: measurement 에 run_id / segment_id
             if not has_col("measurement", "run_id"):
                 c.execute("ALTER TABLE measurement ADD COLUMN run_id TEXT")
             if not has_col("measurement", "segment_id"):
                 c.execute("ALTER TABLE measurement ADD COLUMN segment_id TEXT")
 
         if version < 2:
-            # v1 -> v2: 사전/사후 Offset 분리
             if has_col("experiment_run", "run_id") and not has_col("experiment_run", "pre_offset_run_id"):
                 c.execute("ALTER TABLE experiment_run ADD COLUMN pre_offset_run_id TEXT")
                 c.execute("ALTER TABLE experiment_run ADD COLUMN post_offset_run_id TEXT")
-            # device_offset 을 (offset_run_id, node_id) 키로 재구성. 기존 행은 legacy 키로 보존.
             if not has_col("device_offset", "offset_run_id"):
                 c.execute("ALTER TABLE device_offset RENAME TO device_offset_old")
                 c.executescript(
@@ -89,7 +73,6 @@ class ExperimentStore:
                        FROM device_offset_old""")
                 c.execute("DROP TABLE device_offset_old")
 
-        # 열이 보장된 뒤 인덱스 (fresh/기존 공통)
         c.execute("CREATE INDEX IF NOT EXISTS idx_measurement_run_time "
                   "ON measurement(run_id, server_ts_ms)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_measurement_segment_node "
@@ -104,9 +87,6 @@ class ExperimentStore:
         with self._lock:
             self._conn.close()
 
-    # ------------------------------------------------------------------
-    # 원본 백업: 세션 활성 여부와 무관하게 모든 수신 메시지를 남긴다.
-    # ------------------------------------------------------------------
     def append_jsonl(self, topic: str, payload: str, receive_ms: int,
                      session_id: str | None, point_id: str | None) -> None:
         line = json.dumps(
@@ -126,9 +106,6 @@ class ExperimentStore:
         except OSError:
             logger.exception("jsonl append failed")
 
-    # ------------------------------------------------------------------
-    # experiment / session
-    # ------------------------------------------------------------------
     def create_experiment(self, experiment_id: str, started_at_ms: int,
                           ap_bssid: str | None, ap_channel: int | None,
                           note: str | None = None) -> None:
@@ -159,8 +136,6 @@ class ExperimentStore:
                        point_role: str, started_at_ms: int, planned_seconds: int,
                        note: str | None = None) -> None:
         with self._lock:
-            # 같은 위치를 다시 측정하면 이전 세션들을 superseded 로 표시한다.
-            # 원본은 지우지 않고, 대표값 계산에서만 최신 세션을 쓴다.
             self._conn.execute(
                 """UPDATE session SET superseded = 1
                    WHERE experiment_id = ? AND point_id = ? AND superseded = 0""",
@@ -223,11 +198,7 @@ class ExperimentStore:
             (experiment_id,),
         )
 
-    # ------------------------------------------------------------------
-    # measurement
-    # ------------------------------------------------------------------
     def insert_measurements(self, rows: Iterable[dict[str, Any]]) -> int:
-        # session_id 는 하위호환 유지. Run 기반 저장은 run_id 를 session_id 로도 채운다.
         records = [
             (
                 r["experiment_id"], r.get("session_id") or r.get("run_id") or "",
@@ -254,7 +225,6 @@ class ExperimentStore:
             self._conn.commit()
         return len(records)
 
-    # -- experiment_run --------------------------------------------------
     def create_run(self, run_id: str, experiment_id: str, direction: str,
                    pass_index: int, started_at_ms: int,
                    pre_offset_run_id: str | None = None, note: str | None = None) -> None:
@@ -279,7 +249,6 @@ class ExperimentStore:
             )
             self._conn.commit()
 
-    # -- offset_run (사전/사후 장비 편차) --------------------------------
     def create_offset_run(self, offset_run_id: str, experiment_id: str, phase: str,
                           started_at_ms: int, note: str | None = None) -> None:
         with self._lock:
@@ -354,7 +323,6 @@ class ExperimentStore:
             self._conn.commit()
         return {"runs": runs, "segments": segs}
 
-    # -- test_segment ----------------------------------------------------
     def create_test_segment(self, segment_id: str, run_id: str, point_id: str,
                             order_index: int, attempt_index: int, prepared_at_ms: int,
                             recording_started_at_ms: int, recording_ended_at_ms: int,
@@ -430,8 +398,6 @@ class ExperimentStore:
         MQTT 처리가 지연돼 Segment 자동 종료 뒤 실행돼도, 시간 범위로 올바른 Segment 를 찾는다.
         폐기(superseded)·중단(discarded/interrupted) Segment 는 제외한다.
         """
-        # 상태가 아니라 시간 범위로 판정한다. 안정화 중이어도 ts 가 기록창 안이면 그 Segment 소속.
-        # 폐기/중단된 Segment 만 제외한다.
         rows = self._query(
             """SELECT * FROM test_segment
                 WHERE run_id = ? AND superseded = 0
@@ -487,9 +453,6 @@ class ExperimentStore:
             (experiment_id,),
         )
 
-    # ------------------------------------------------------------------
-    # node_assignment
-    # ------------------------------------------------------------------
     def upsert_assignment(self, experiment_id: str, node_id: str, point_id: str,
                           point_role: str, updated_at_ms: int) -> None:
         with self._lock:
@@ -510,9 +473,6 @@ class ExperimentStore:
             (experiment_id,),
         )
 
-    # ------------------------------------------------------------------
-    # point / offset / tx
-    # ------------------------------------------------------------------
     def upsert_point(self, experiment_id: str, point_id: str, point_role: str | None,
                      pos_x: float | None, pos_y: float | None, pos_z: float | None,
                      note: str | None, updated_at_ms: int) -> None:
@@ -538,7 +498,6 @@ class ExperimentStore:
                              offset_median_dbm: float | None, device_offset_db: float | None,
                              sample_count: int, std_db: float | None,
                              calibrated_at_ms: int) -> None:
-        # 키는 (offset_run_id, node_id): 사후 계산이 사전값을 덮어쓰지 않게 한다.
         with self._lock:
             self._conn.execute(
                 """INSERT INTO device_offset
@@ -589,7 +548,6 @@ class ExperimentStore:
             "SELECT * FROM tx WHERE experiment_id = ? ORDER BY tx_id", (experiment_id,)
         )
 
-    # ------------------------------------------------------------------
     def _query(self, sql: str, params: tuple = ()) -> list[dict[str, Any]]:
         with self._lock:
             rows = self._conn.execute(sql, params).fetchall()

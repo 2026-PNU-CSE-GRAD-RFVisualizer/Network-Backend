@@ -1,10 +1,10 @@
-"""사전/사후 Device Offset 분리 검증 (팀장 추가 요청 1).
+"""사전/사후 Device Offset 분리 검증
 
 - 사전·사후 OffsetRun 이 서로 다른 ID 로 저장된다.
 - 사후 계산이 사전 적용값을 덮어쓰지 않는다.
 - corrected_rssi 는 Run 의 '사전' offset 을 쓴다.
 - QC/Export 에 node별 drift(post-pre) 가 기록된다.
-- device_offset 구(舊) 스키마 DB 도 마이그레이션 후 데이터 보존.
+- device_offset 스키마 DB 도 마이그레이션 후 데이터 보존.
 """
 
 from __future__ import annotations
@@ -18,9 +18,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from backend.experiment import ExperimentManager, compute_device_offsets  # noqa: E402
-from backend.export import export_experiment  # noqa: E402
-from backend.store import SCHEMA_VERSION, ExperimentStore  # noqa: E402
+from backend.experiment import ExperimentManager, compute_device_offsets
+from backend.export import export_experiment
+from backend.store import SCHEMA_VERSION, ExperimentStore
 
 NODES = ["n1", "n2", "n3", "n4", "n5"]
 
@@ -56,7 +56,7 @@ def test_pre_post_stored_separately_no_overwrite():
             mgr.assign(n, "offset-00", "offset")
 
         pre_bias = {"n1": 1.8, "n2": -2.4, "n3": 0.6, "n4": -1.1, "n5": 3.2}
-        post_bias = {"n1": 2.3, "n2": -2.0, "n3": 0.6, "n4": -0.5, "n5": 3.9}  # 달라짐
+        post_bias = {"n1": 2.3, "n2": -2.0, "n3": 0.6, "n4": -0.5, "n5": 3.9}
         pre_id, pre_res = _measure_offset(store, mgr, "pre", pre_bias)
         post_id, post_res = _measure_offset(store, mgr, "post", post_bias)
 
@@ -64,9 +64,7 @@ def test_pre_post_stored_separately_no_overwrite():
         pre_rows = {o["node_id"]: o["device_offset_db"] for o in store.list_device_offsets("exp1", pre_id)}
         post_rows = {o["node_id"]: o["device_offset_db"] for o in store.list_device_offsets("exp1", post_id)}
         assert len(pre_rows) == 5 and len(post_rows) == 5
-        # 사후 계산이 사전값을 덮어쓰지 않았다
         assert pre_rows != post_rows
-        # 두 offset run 의 행이 device_offset 에 공존한다 (5+5)
         assert len(store.list_device_offsets("exp1")) == 10
         store.close()
 
@@ -81,7 +79,6 @@ def test_corrected_uses_pre_offset_and_export_drift():
         pre_id, _ = _measure_offset(store, mgr, "pre", {"n1": 1.8, "n2": -2.4, "n3": 0.6, "n4": -1.1, "n5": 3.2})
         post_id, _ = _measure_offset(store, mgr, "post", {"n1": 5.0, "n2": -5.0, "n3": 0.6, "n4": -1.1, "n5": 3.2})
 
-        # 본 실험 Run: 사전 offset 자동 적용
         for n, pt in [("n1", "C1"), ("n2", "C2"), ("n3", "C3"), ("n4", "C4")]:
             mgr.assign(n, pt, "calibration")
             store.upsert_point("exp1", pt, "calibration", 1.0, 1.0, 0.8, None, 0)
@@ -90,7 +87,7 @@ def test_corrected_uses_pre_offset_and_export_drift():
         store.upsert_tx("exp1", "tx-01", 7.0, 1.5, 1.2, 2_400_000_000, "aa", 6, None)
 
         run = mgr.start_run("forward", 1)
-        assert store.get_run(run["run_id"])["pre_offset_run_id"] == pre_id  # 사전 적용됨
+        assert store.get_run(run["run_id"])["pre_offset_run_id"] == pre_id
         seg = mgr.prepare_test_segment("T1", 1, 0, 2)
         rs = seg["recording_started_at_ms"]
         for k in range(3):
@@ -106,7 +103,6 @@ def test_corrected_uses_pre_offset_and_export_drift():
         mgr.finish_test_segment()
         mgr.attach_post_offset(post_id)
 
-        # export 행의 device_offset_db 는 '사전' 값이어야 한다
         rows = store.measurements_for_export("exp1")
         pre_map = {o["node_id"]: o["device_offset_db"] for o in store.list_device_offsets("exp1", pre_id)}
         run_rows = [r for r in rows if r["run_id"] == run["run_id"] and r["point_role"] == "calibration"]
@@ -118,7 +114,7 @@ def test_corrected_uses_pre_offset_and_export_drift():
         dev = json.loads((Path(out["path"]) / "config" / "device_offsets.json").read_text())
         assert dev["pre_offset_run_id"] == pre_id and dev["post_offset_run_id"] == post_id
         drift = {d["node_id"]: d["device_offset_drift_db"] for d in dev["drift"]}
-        assert all(v is not None for v in drift.values())   # pre·post 모두 있으니 drift 계산됨
+        assert all(v is not None for v in drift.values())
         assert "offset_drift" in out["qc"]
         store.close()
 
@@ -146,7 +142,7 @@ def test_legacy_device_offset_migrates():
         assert "offset_run_id" in cols
         row = con.execute("SELECT offset_run_id, device_offset_db FROM device_offset "
                           "WHERE node_id='node1'").fetchone()
-        assert row[0] == "legacy:oldexp" and row[1] == 1.5   # 보존 + legacy 키
+        assert row[0] == "legacy:oldexp" and row[1] == 1.5
         con.close(); store.close()
 
 
@@ -159,7 +155,7 @@ if __name__ == "__main__":
         try:
             t()
             print(f"PASS {t.__name__}")
-        except Exception:  # noqa: BLE001
+        except Exception:
             failed += 1
             print(f"FAIL {t.__name__}")
             traceback.print_exc()

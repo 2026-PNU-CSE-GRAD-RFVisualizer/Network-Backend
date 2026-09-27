@@ -8,14 +8,14 @@ import sys
 import time
 from pathlib import Path
 
-MAGIC = 0x52464A46  # 'RFJF'
+MAGIC = 0x52464A46
 VERSION = 1
-_HEADER = struct.Struct(">IBBIQI")  # magic, version, flags, seq, ts_ms, length
+_HEADER = struct.Struct(">IBBIQI")
 
 try:
-    from PIL import Image  # type: ignore
+    from PIL import Image
     _HAS_PIL = True
-except Exception:  # noqa: BLE001
+except Exception:
     _HAS_PIL = False
 
 
@@ -26,8 +26,6 @@ def encode_frame(payload: bytes, seq: int) -> bytes:
 
 def load_jpeg(path: Path, width: int, height: int, resize: bool,
               quality: int, subsampling: int, gray: bool) -> bytes:
-    # ESP32 esp_jpeg 디코더는 baseline JPEG 만 처리한다(progressive 불가).
-    # 원본이 어떤 형식이든 항상 baseline 으로 다시 인코딩해서 보낸다.
     if not _HAS_PIL:
         print("[error] Pillow 필요: baseline JPEG 로 변환하려면 설치해야 함.\n"
               "        pip install pillow")
@@ -37,17 +35,17 @@ def load_jpeg(path: Path, width: int, height: int, resize: bool,
         img = img.resize((width, height))
     buf = io.BytesIO()
     save_kw = dict(format="JPEG", quality=quality,
-                   progressive=False,  # baseline (ESP32 esp_jpeg 호환)
+                   progressive=False,
                    optimize=False)
     if not gray:
-        save_kw["subsampling"] = subsampling  # 0=4:4:4, 1=4:2:2, 2=4:2:0
+        save_kw["subsampling"] = subsampling
     img.save(buf, **save_kw)
     return buf.getvalue()
 
 
 def main() -> None:
     p = argparse.ArgumentParser(description="JPEG 파일 하나를 중계로 전송")
-    p.add_argument("image", help="보낼 JPEG 파일 경로 (예: 1234.jpg)")
+    p.add_argument("image", help="보낼 JPEG 파일 경로 (예: images/1234.jpg)")
     p.add_argument("--host", default="127.0.0.1", help="중계 서버 주소 (같은 PC면 127.0.0.1)")
     p.add_argument("--port", type=int, default=9101, help="ingest 포트 (기본 9101)")
     p.add_argument("--fps", type=float, default=5.0, help="초당 재전송 횟수 (기본 5)")

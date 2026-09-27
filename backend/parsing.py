@@ -50,7 +50,6 @@ def parse_measurement(data: dict[str, Any], receive_ms: int,
         v = _f(*keys)
         return int(v) if v is not None else None
 
-    # 펌웨어 필드명 호환: Filtered=rssi|rssi_filtered|rssi_filtered_dbm, Raw=rssi_raw|rssi_raw_dbm
     filtered = _f("rssi_filtered_dbm", "rssi_filtered", "rssi")
     raw = _f("rssi_raw_dbm", "rssi_raw")
 
@@ -81,7 +80,6 @@ def parse_measurement(data: dict[str, Any], receive_ms: int,
         "timestamp": timestamp,
         "ap_bssid": data.get("ap_bssid"),
         "ap_channel": _i("ap_channel", "channel"),
-        # 실시간 파이프라인은 정수 rssi 를 기대하므로 대표값을 rssi 로도 유지
         "rssi": int(round(filtered)) if filtered is not None else None,
         "rssi_filtered": filtered,
         "rssi_raw": raw,

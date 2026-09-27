@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 
 from .window import WindowBuffer
 
-if TYPE_CHECKING:  # pragma: no cover
+if TYPE_CHECKING:
     from .ws import WebSocketHub
 
 __all__ = ["WindowBuffer", "WebSocketHub"]

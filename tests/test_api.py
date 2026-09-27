@@ -1,10 +1,10 @@
-"""FastAPI 통합 테스트 (실제 앱 라우팅·상태 기계 관통).
+"""FastAPI 통합 테스트
 
 FastAPI/httpx 가 설치된 환경(venv)에서만 실행된다:
     py -m pytest tests/test_api.py -q
 
 핵심 회귀:
-- /experiment/end 가 500 이 아니라 200 (재설계 시 누락됐던 end_experiment)
+- /experiment/end 가 500 이 아니라 200 (end_experiment 보충)
 - 사전 Offset 없이 /run/start 는 409
 - 구 /session/* 는 410 Gone
 - Run 없이 /test-segment/prepare 는 409
@@ -29,7 +29,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 @pytest.fixture()
 def client():
-    # 데이터 격리: import 전에 임시 폴더 지정. 실시간 경로는 끈다.
     tmp = tempfile.mkdtemp()
     os.environ["EXPERIMENT_DATA_DIR"] = str(Path(tmp) / "data")
     os.environ["EXPORT_ROOT"] = str(Path(tmp) / "experiments")
@@ -40,7 +39,7 @@ def client():
     import backend.main as main
     importlib.reload(main)
     from fastapi.testclient import TestClient
-    with TestClient(main.app) as c:      # lifespan 실행(브로커 없어도 connect_async 는 비차단)
+    with TestClient(main.app) as c:
         yield c
 
 
@@ -53,14 +52,14 @@ def _new_exp(client) -> str:
 def test_experiment_end_not_500(client):
     _new_exp(client)
     r = client.post("/experiment/end")
-    assert r.status_code == 200          # 예전엔 AttributeError → 500
+    assert r.status_code == 200
     assert r.json()["ended"] is True
 
 
 def test_run_start_requires_pre_offset(client):
     _new_exp(client)
     r = client.post("/run/start", json={"direction": "forward", "pass_index": 1})
-    assert r.status_code == 409          # 사전 Offset 없음
+    assert r.status_code == 409
 
 
 def test_legacy_session_gone(client):
@@ -79,18 +78,15 @@ def test_segment_without_run_conflict(client):
 
 def test_bad_pass_index_rejected(client):
     _new_exp(client)
-    # offset 없이도 pass_index 검증은 400 이어야(값 오류 우선). 여기선 409 또는 400 허용.
     r = client.post("/run/start", json={"direction": "forward", "pass_index": 0})
     assert r.status_code in (400, 409)
 
 
 def test_new_experiment_interrupts_open_runs(client):
-    # 첫 실험 + offset + run 시작 후, 두 번째 실험을 시작하면 이전 run 이 interrupted 로 정리된다.
     exp = _new_exp(client)
     for i, pt in enumerate(["C1", "C2", "C3", "C4"], start=1):
         client.post("/experiment/assign", json={"node_id": f"node-0{i}", "point_id": pt, "point_role": "calibration"})
     client.post("/experiment/assign", json={"node_id": "node-05", "point_id": "T-move", "point_role": "test"})
-    # 사전 offset 을 직접 주입(측정 없이 API 로는 어려우므로 store 로 최소 구성)
     import backend.main as main
     off = main.sessions.start_offset_run("pre")
     for n in ["node-01", "node-02", "node-03", "node-04", "node-05"]:
@@ -106,4 +102,4 @@ def test_new_experiment_interrupts_open_runs(client):
     assert client.post("/run/start", json={"direction": "forward", "pass_index": 1}).status_code == 200
     r = client.post("/experiment/start", json={"experiment_id": "api_second"})
     assert r.status_code == 200
-    assert r.json()["interrupted"]["runs"] >= 1     # 이전 run 이 정리됨
+    assert r.json()["interrupted"]["runs"] >= 1

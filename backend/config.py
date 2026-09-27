@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     mqtt_username: str | None = None
     mqtt_password: str | None = None
 
-    database_dsn: str = "postgresql://jhkang:jhkang@127.0.0.1:5432/jhkang_network"
+    database_dsn: str = "postgresql://user:password@127.0.0.1:5432/network"
 
     enable_realtime: bool = False
 

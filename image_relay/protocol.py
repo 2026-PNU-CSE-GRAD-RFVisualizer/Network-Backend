@@ -1,9 +1,3 @@
-"""JPEG 프레임 와이어 포맷 (INTERFACE.md §12 구체화).
-
-포맷 (producer→server, server→viewer 동일, big-endian):
-    22B 헤더 = magic(u32 'RFJF') version(u8) flags(u8) seq(u32) ts_ms(u64) length(u32)
-    payload  = length 바이트의 JPEG (서버는 내용 해석 없이 바이트만 중계)
-"""
 
 from __future__ import annotations
 
@@ -12,12 +6,12 @@ import time
 from dataclasses import dataclass
 from typing import Callable
 
-MAGIC = 0x52464A46  # 'RFJF'
+MAGIC = 0x52464A46
 VERSION = 1
 
-_HEADER = struct.Struct(">IBBIQI")  # magic, version, flags, seq, ts_ms, length
-HEADER_SIZE = _HEADER.size  # 22
-MAX_FRAME_BYTES = 8 * 1024 * 1024  # 손상 헤더의 과대 length 로부터 메모리 보호
+_HEADER = struct.Struct(">IBBIQI")
+HEADER_SIZE = _HEADER.size
+MAX_FRAME_BYTES = 8 * 1024 * 1024
 
 
 class ProtocolError(Exception):
@@ -75,5 +69,5 @@ def read_frame(recv: Callable[[int], bytes]) -> Frame | None:
         raise ProtocolError(f"length {length}B 가 상한 {MAX_FRAME_BYTES}B 초과")
     payload = read_exactly(recv, length) if length else b""
     if length and not payload:
-        return None  # payload 도중 끊김
+        return None
     return Frame(seq=seq, ts_ms=ts_ms, payload=payload, flags=flags)

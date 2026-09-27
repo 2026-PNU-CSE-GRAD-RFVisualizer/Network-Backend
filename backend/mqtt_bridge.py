@@ -39,8 +39,6 @@ class MqttBridge:
         self.metrics = metrics
         self.store = store
         self.sessions = sessions
-        # 브로커 연결 상태. 현장에서 "샘플이 안 들어오는 이유"를 구분하려면 필요하다.
-        # (브로커가 죽은 것인지, ESP32 가 죽은 것인지)
         self.connected = False
         self.connect_count = 0
         self.disconnect_count = 0
@@ -66,8 +64,6 @@ class MqttBridge:
         self.connected = True
         self.connect_count += 1
         self.last_connected_ms = now_ms()
-        # 재연결 시에도 구독을 다시 걸어야 한다. 브로커가 재시작되면 세션이 사라지므로
-        # 여기서 다시 subscribe 하지 않으면 연결은 살아 있는데 메시지가 오지 않는다.
         client.subscribe("rssi/#")
         client.subscribe("gateway/#")
         client.subscribe("status/+/lwt")
@@ -103,8 +99,6 @@ class MqttBridge:
     async def handle_message(self, topic: str, payload: bytes) -> None:
         receive_ms = now_ms()
 
-        # 비상 경로 (계획서 §12): 파싱 성공 여부와 무관하게 원본을 먼저 남긴다.
-        # MQTT 이후 어느 단계가 실패해도 이 파일만 있으면 데이터를 복구할 수 있다.
         if self.store is not None and not topic.endswith("/lwt"):
             run = self.sessions.active_run() if self.sessions else None
             seg = self.sessions.active_test_segment() if self.sessions else None
@@ -177,7 +171,7 @@ class MqttBridge:
             return
 
         status, became_online = self.registry.mark_seen(measurement["node_id"], measurement.get("seq"))
-        if self.window_buffer is not None:   # 실시간 경로가 켜져 있을 때만
+        if self.window_buffer is not None:
             self.window_buffer.add(measurement, receive_ms)
         self.db.enqueue_raw(measurement, server_dt)
         await self.db.upsert_node_status(status)
@@ -202,7 +196,7 @@ class MqttBridge:
             return
         self.store.insert_measurements([{
             "experiment_id": mgr.experiment_id,
-            "session_id": ctx["run_id"],          # 하위호환: run_id 를 session_id 로도
+            "session_id": ctx["run_id"],
             "run_id": ctx["run_id"],
             "segment_id": ctx["segment_id"],
             "point_id": ctx["point_id"],

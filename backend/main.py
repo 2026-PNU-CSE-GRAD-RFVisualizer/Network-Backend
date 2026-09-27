@@ -28,9 +28,7 @@ logger = logging.getLogger(__name__)
 
 db = Database(settings.database_dsn)
 registry = NodeRegistry(settings.node_timeout_seconds)
-# 실시간 경로는 9월 졸업작품 범위. 논문 실험에서는 켜지 않는다.
 window_buffer = WindowBuffer(settings.window_size_ms, settings.window_grace_ms) if settings.enable_realtime else None
-# hub 는 노드 online/offline 알림에도 쓰이므로 항상 만든다. 구독자가 없으면 비용이 없다.
 hub = WebSocketHub()
 metrics = Metrics()
 store = ExperimentStore(settings.experiment_data_path)
@@ -68,7 +66,7 @@ class ExperimentStart(BaseModel):
 
 
 class OffsetStart(BaseModel):
-    phase: str = "pre"          # pre | post
+    phase: str = "pre"
     note: str | None = None
 
 
@@ -112,8 +110,6 @@ class HandheldActivePosition(BaseModel):
 
 
 class ExportRequest(BaseModel):
-    # 압축 리허설처럼 측정 시간이 짧을 때 기대 샘플 수를 낮춰 잡기 위한 값.
-    # 지정하지 않으면 설정값(위치당 30개)을 쓴다.
     expected_samples: int | None = None
 
 
@@ -160,8 +156,6 @@ async def lifespan(app: FastAPI):
     mqtt_bridge = MqttBridge(settings, loop, db, registry, window_buffer, hub, metrics,
                              store=store, sessions=sessions)
     mqtt_bridge.start()
-    # 백엔드 재시작 처리(§15): 이전에 running 으로 남은 Run/Segment 를 interrupted 로 표시.
-    # 열린 구간을 정상 완료로 숨기지 않는다.
     interrupted = store.mark_all_open_interrupted(now_ms())
     if interrupted:
         logger.warning("이전 실행에서 열린 채 남은 Run/Segment 를 interrupted 로 표시: %s", interrupted)
@@ -216,7 +210,6 @@ app = FastAPI(title="3DGS RSSI Backend", version="0.5.0-run", lifespan=lifespan)
 
 @app.exception_handler(Conflict)
 async def _conflict_handler(request: Request, exc: Conflict) -> JSONResponse:
-    # 상태 위반(중복 시작·순서 위반 등)은 409. 조용히 덮어쓰지 않는다.
     return JSONResponse(status_code=409, content={"detail": str(exc)})
 
 
@@ -306,17 +299,9 @@ async def set_node_meta(meta: NodeMeta) -> dict[str, object]:
     await db.upsert_node_meta(meta.model_dump())
     return {"ok": True, "node_id": meta.node_id}
 
-# ----------------------------------------------------------------------
-# 논문 실험 API (7/23 강의실 측정)
-# ----------------------------------------------------------------------
 
 @app.post("/experiment/start")
 async def experiment_start(body: ExperimentStart) -> dict[str, object]:
-    # 실험 시작 버튼을 누를 때마다 입력한 이름 뒤에 실행 시각을 붙여
-    # 매번 새로운 experiment_id 를 만든다. 그러면:
-    #   - 이전 실험 폴더는 그대로 남고 (experiments/<이전id>/)
-    #   - 이번 실험은 새 폴더(experiments/<새id>/)에 저장된다.
-    # 예: classroom_20260723  ->  classroom_20260723_213045
     base = body.experiment_id.strip() or "experiment"
     run_id = f"{base}_{time.strftime('%H%M%S')}"
     return sessions.start_experiment(run_id, body.ap_bssid,
@@ -341,7 +326,6 @@ async def experiment_assign(body: Assignment) -> dict[str, object]:
 async def experiment_assignments() -> dict[str, object]:
     return {"assignments": store.list_assignments(require_experiment())}
 
-# -- Offset 측정 -----------------------------------------------------
 @app.post("/offset-run/start")
 async def offset_run_start(body: OffsetStart | None = None) -> dict[str, object]:
     return sessions.start_offset_run(body.phase if body else "pre",
@@ -356,7 +340,6 @@ async def offset_run_current() -> dict[str, object]:
     active = sessions.active_offset_run()
     return {"offset_run": active.to_dict() if active else None}
 
-# -- 본 실험 Run -----------------------------------------------------
 @app.post("/run/start")
 async def run_start(body: RunStart) -> dict[str, object]:
     return sessions.start_run(body.direction, body.pass_index, body.offset_run_id, body.note)
@@ -382,9 +365,9 @@ async def run_current() -> dict[str, object]:
         entry = {"node_id": node, "point_id": point,
                  "online": bool(rs.get("online")),
                  "msg_rate_hz": rs.get("msg_rate_hz", 0.0),
-                 "samples": st.get("samples", 0),          # 이 Run 누적 저장 수
+                 "samples": st.get("samples", 0),
                  "last_seen_ms": last_ms,
-                 "gap_ms": (cur - last_ms) if last_ms else None}  # 마지막 수신 후 경과(수신 공백)
+                 "gap_ms": (cur - last_ms) if last_ms else None}
         if role == "calibration":
             cal_nodes.append(entry)
         elif role == "test":
@@ -410,7 +393,6 @@ async def run_current() -> dict[str, object]:
         "mqtt": mqtt_bridge.status() if mqtt_bridge else {"connected": False},
     }
 
-# -- TestSegment -----------------------------------------------------
 @app.post("/test-segment/prepare")
 async def test_segment_prepare(body: SegmentPrepare) -> dict[str, object]:
     return sessions.prepare_test_segment(
@@ -440,8 +422,6 @@ async def test_segment_current() -> dict[str, object]:
 async def experiment_runs() -> dict[str, object]:
     return {"runs": store.list_runs(require_experiment())}
 
-# -- Legacy 차단 -----------------------------------------------------
-# 구 세션 API 는 새 Run/TestSegment 로 대체됐다. 조용히 성공시키지 않고 명시적으로 410.
 _LEGACY_MSG = ("이 API 는 제거되었습니다. /run/*, /test-segment/*, /offset-run/* 를 사용하세요. "
                "(단일 세션 경로로는 새 실험 데이터를 만들 수 없습니다.)")
 
@@ -486,7 +466,6 @@ async def run_attach_post_offset(body: PostOffset) -> dict[str, object]:
 @app.post("/experiment/export")
 async def experiment_export(body: ExportRequest | None = None) -> dict[str, object]:
     experiment_id = require_experiment()
-    # offset 은 사전/사후 OffsetRun 별로 이미 계산되어 있다(여기서 재계산하지 않음).
     expected = (body.expected_samples if body and body.expected_samples
                 else settings.test_recording_seconds)
     return export_experiment(store, experiment_id, settings.export_root_path, expected,
@@ -515,7 +494,6 @@ async def measure_page() -> str:
     return MEASURE_HTML
 
 
-# 실시간 라우트(WS /frames, /position/latest)는 ENABLE_REALTIME=true 일 때만 붙는다.
 if settings.enable_realtime:
     from .realtime.routes import build_router
     app.include_router(build_router(hub, registry))

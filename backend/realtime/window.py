@@ -22,15 +22,13 @@ class WindowBuffer:
     def __init__(self, window_size_ms: int, grace_ms: int | None = None,
                  stall_flush_ms: int | None = None) -> None:
         self.window_size_ms = window_size_ms
-        # 유예: 늦은 도착을 기다리는 시간. p95 지연 이상으로 잡는 것이 안전.
         self.grace_ms = window_size_ms if grace_ms is None else grace_ms
-        # 스트림 정지 시 서버 시계로 강제 확정하기까지의 추가 대기.
         self.stall_flush_ms = window_size_ms if stall_flush_ms is None else stall_flush_ms
 
         self.buckets: dict[int, dict[str, dict[str, Any]]] = defaultdict(dict)
-        self._watermark: int | None = None      # 지금까지 본 최신 측정 시각
-        self._emitted_before: int | None = None  # 이미 확정한 최대 bucket_ts
-        self.late_dropped = 0                    # 확정 후 도착해 버려진 샘플 수(진단용)
+        self._watermark: int | None = None
+        self._emitted_before: int | None = None
+        self.late_dropped = 0
 
     def _bucket_of(self, ts: int) -> int:
         return ts - (ts % self.window_size_ms)
@@ -38,18 +36,17 @@ class WindowBuffer:
     def add(self, measurement: dict[str, Any], receive_ms: int) -> None:
         meas_ts = measurement.get("timestamp")
         if meas_ts is None:
-            meas_ts = receive_ms  # 측정 시각이 없으면 도착 시각으로 대체
+            meas_ts = receive_ms
         bucket_ts = self._bucket_of(meas_ts)
 
         if self._emitted_before is not None and bucket_ts <= self._emitted_before:
-            self.late_dropped += 1  # 유예까지 지나 이미 확정된 구간 → 폐기(기록)
+            self.late_dropped += 1
             return
 
         self._watermark = meas_ts if self._watermark is None else max(self._watermark, meas_ts)
 
         node_id = measurement["node_id"]
         current = self.buckets[bucket_ts].get(node_id)
-        # 같은 버킷에 한 노드가 여러 개면 측정 시각이 더 최신인 것을 유지
         if current is None or meas_ts >= current["_meas_ts"]:
             item = dict(measurement)
             item["_meas_ts"] = meas_ts
@@ -57,8 +54,6 @@ class WindowBuffer:
             self.buckets[bucket_ts][node_id] = item
 
     def pop_ready(self, current_ms: int, known_nodes: set[str]) -> list[dict[str, Any]]:
-        # 확정 경계: 측정시각 워터마크가 (구간끝+유예)를 지났거나(정상),
-        # 스트림 정지 시 서버 시계가 (구간끝+유예+정지대기)를 지나면 강제 확정.
         event_ready = (self._watermark - self.window_size_ms - self.grace_ms
                        if self._watermark is not None else None)
         wall_ready = current_ms - self.window_size_ms - self.grace_ms - self.stall_flush_ms
@@ -87,7 +82,7 @@ class WindowBuffer:
             frames.append(
                 {
                     "type": "rssi_frame",
-                    "window_ts": bucket_ts,            # 측정 시각 기준 구간 시작
+                    "window_ts": bucket_ts,
                     "window_size_ms": self.window_size_ms,
                     "grace_ms": self.grace_ms,
                     "nodes": nodes,

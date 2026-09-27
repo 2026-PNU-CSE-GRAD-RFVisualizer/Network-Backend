@@ -3,8 +3,8 @@
 ESP32 가 JPEG 디코딩(약 190ms)을 건너뛰도록, 이미지를 미리 RGB332 로 변환한다.
 ESP32 는 payload 를 zlib 해제 → 정확히 384,000B(=800*480, 1B/픽셀) → 그대로 LCD 출력.
 
-    py send_rgb332.py 1234.jpg --host 127.0.0.1 --port 9101 --fps 10
-    py send_rgb332.py 1234.jpg --once
+    py send_rgb332.py images/1234.jpg --host 127.0.0.1 --port 9101 --fps 10
+    py send_rgb332.py images/1234.jpg --once
 
 와이어 포맷(RFJF, big-endian) — JPEG 경로와 헤더 동일, flags 만 1:
     magic     uint32  0x52464A46 ('RFJF')
@@ -32,38 +32,35 @@ import time
 import zlib
 from pathlib import Path
 
-MAGIC = 0x52464A46  # 'RFJF'
+MAGIC = 0x52464A46
 VERSION = 1
 FLAG_RGB332_ZLIB = 1
-_HEADER = struct.Struct(">IBBIQI")  # magic, version, flags, seq, ts_ms, length
+_HEADER = struct.Struct(">IBBIQI")
 
 W, H = 800, 480
-RAW_SIZE = W * H  # 384000 (1 byte/pixel)
+RAW_SIZE = W * H
 
 try:
-    import numpy as np  # type: ignore
-    from PIL import Image  # type: ignore
+    import numpy as np
+    from PIL import Image
     _HAS_DEPS = True
-except Exception:  # noqa: BLE001
+except Exception:
     _HAS_DEPS = False
 
 
 def _compress(raw: bytes, level: int, raw_deflate: bool) -> bytes:
     if raw_deflate:
-        # RFC1951 raw deflate: zlib 헤더/adler32 없음 (miniz/tinfl 기대 시).
         co = zlib.compressobj(level, zlib.DEFLATED, -15)
         return co.compress(raw) + co.flush()
-    # RFC1950 zlib 스트림: 2바이트 헤더 + deflate + adler32 (기본).
     return zlib.compress(raw, level)
 
 
 def _pack_rgb332(r, g, b, order: str):
-    # 3-3-2 패킹. 색이 밴드로 깨지면 패널이 기대하는 비트 순서로 바꿔 시험.
-    if order == "rgb":   # RRRGGGBB (상위=R)
+    if order == "rgb":
         return (r & 0xE0) | ((g >> 3) & 0x1C) | (b >> 6)
-    if order == "bgr":   # BBBGGGRR (상위=B)
+    if order == "bgr":
         return (b & 0xE0) | ((g >> 3) & 0x1C) | (r >> 6)
-    if order == "brg":   # BBBRRRGG
+    if order == "brg":
         return (b & 0xE0) | ((r >> 3) & 0x1C) | (g >> 6)
     raise ValueError(order)
 
@@ -73,10 +70,10 @@ def to_rgb332_zlib(path: Path, level: int, raw_deflate: bool, order: str) -> byt
         print("[error] numpy + Pillow 필요:  pip install numpy pillow")
         sys.exit(1)
     img = Image.open(path).convert("RGB").resize((W, H))
-    arr = np.asarray(img, dtype=np.uint8)          # (480, 800, 3)
+    arr = np.asarray(img, dtype=np.uint8)
     r, g, b = arr[:, :, 0], arr[:, :, 1], arr[:, :, 2]
     rgb332 = _pack_rgb332(r, g, b, order).astype(np.uint8)
-    raw = rgb332.tobytes()                          # 384000 B, 행 우선
+    raw = rgb332.tobytes()
     assert len(raw) == RAW_SIZE, len(raw)
     return _compress(raw, level, raw_deflate)
 
@@ -106,7 +103,6 @@ def main() -> None:
         print(f"[error] 파일 없음: {path.resolve()}")
         sys.exit(1)
 
-    # 정지 이미지이므로 압축 프레임을 한 번만 만들어 재사용 (실시간 영상이면 프레임마다 변환).
     payload = to_rgb332_zlib(path, args.level, args.raw_deflate, args.bit_order)
     ratio = RAW_SIZE / len(payload) if payload else 0
     fmt = "raw deflate(RFC1951)" if args.raw_deflate else "zlib(RFC1950)"
@@ -114,16 +110,15 @@ def main() -> None:
           f"raw {RAW_SIZE//1000}KB → {fmt} {len(payload)/1024:.1f} KiB "
           f"(x{ratio:.0f} 압축, level {args.level}) | {W}x{H} | bits={args.bit_order}")
 
-    # 자기검증: 실제로 보내는 바이트가 RFC1950 zlib 인지, 해제하면 384000B 인지 확인.
     head = payload[:2].hex()
-    is_zlib = payload[:1] == b"\x78"           # RFC1950 은 0x78 로 시작 (78 9c / 78 da 등)
+    is_zlib = payload[:1] == b"\x78"
     print(f"[check] 압축 헤더 첫 2바이트 = {head}  → "
           f"{'RFC1950 zlib ✅' if is_zlib else 'zlib 헤더 아님 ❌ (ESP32 는 zlib 를 기대함!)'}")
     try:
         dec = zlib.decompress(payload) if not args.raw_deflate else zlib.decompress(payload, -15)
         print(f"[check] 해제 크기 = {len(dec)} B "
               f"{'(정확히 384000 ✅)' if len(dec)==RAW_SIZE else '(384000 아님 ❌)'}")
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         print(f"[check] 해제 실패: {e}")
     if args.raw_deflate:
         print("[check] ⚠ raw-deflate 모드입니다. ESP32 는 RFC1950 zlib 를 기대하므로 "

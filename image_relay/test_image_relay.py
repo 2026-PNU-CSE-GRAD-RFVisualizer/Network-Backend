@@ -1,8 +1,4 @@
-"""중계 서버 검증 (실제 TCP 소켓, 외부 의존성 없음).
 
-    pytest image_relay/test_image_relay.py -q
-    python  image_relay/test_image_relay.py     # pytest 없이도 실행 가능
-"""
 
 from __future__ import annotations
 
@@ -14,15 +10,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from image_relay.protocol import (  # noqa: E402
+from image_relay.protocol import (
     HEADER_SIZE, MAGIC, ProtocolError, encode_frame, read_frame,
 )
-from image_relay.server import RelayServer, Stats, Viewer  # noqa: E402
+from image_relay.server import RelayServer, Stats, Viewer
 
 
-# ----------------------------------------------------------------------
-# 프로토콜 단위 테스트
-# ----------------------------------------------------------------------
 def test_frame_roundtrip():
     payload = b"\xff\xd8hello-jpeg\xff\xd9"
     wire = encode_frame(payload, seq=42, ts_ms=1785720000000)
@@ -63,9 +56,6 @@ def test_corrupt_magic_raises():
     raise AssertionError("손상 magic 인데 ProtocolError 가 안 났다")
 
 
-# ----------------------------------------------------------------------
-# 서버 종단 테스트
-# ----------------------------------------------------------------------
 def _free_port() -> int:
     s = socket.socket()
     s.bind(("127.0.0.1", 0))
@@ -78,7 +68,7 @@ def _start_server() -> RelayServer:
     srv = RelayServer(ingest_port=_free_port(), viewer_port=_free_port(),
                       host="127.0.0.1", stats_interval=999)
     srv.start()
-    time.sleep(0.3)  # listen 소켓이 뜰 시간
+    time.sleep(0.3)
     return srv
 
 
@@ -90,7 +80,7 @@ def test_end_to_end_delivery():
     srv = _start_server()
     try:
         viewer = _connect(srv.viewer_port)
-        time.sleep(0.2)  # 뷰어 등록 대기
+        time.sleep(0.2)
         producer = _connect(srv.ingest_port)
 
         for seq in range(5):
@@ -142,7 +132,7 @@ def test_viewer_buffer_keeps_only_latest():
     frame = read_frame(io.BytesIO(latest).read)
     assert frame.seq == 4, f"최신이 아님: seq={frame.seq}"
     assert stats.frames_dropped == 4, f"dropped={stats.frames_dropped} (기대 4)"
-    assert v.get(timeout=0.1) is None  # 남은 프레임 없음
+    assert v.get(timeout=0.1) is None
 
 
 def test_flood_drops_stale_frames_end_to_end():
@@ -156,7 +146,7 @@ def test_flood_drops_stale_frames_end_to_end():
         producer = _connect(srv.ingest_port)
 
         total = 500
-        for seq in range(total):  # 뷰어가 안 읽는 동안 빠르게 flood
+        for seq in range(total):
             producer.sendall(encode_frame(b"x" * 8192, seq, ts_ms=seq))
         time.sleep(0.5)
 
@@ -186,7 +176,6 @@ def test_flood_drops_stale_frames_end_to_end():
         srv.stop()
 
 
-# ----------------------------------------------------------------------
 if __name__ == "__main__":
     import traceback
 
@@ -196,7 +185,7 @@ if __name__ == "__main__":
         try:
             t()
             print(f"PASS {t.__name__}")
-        except Exception:  # noqa: BLE001
+        except Exception:
             failed += 1
             print(f"FAIL {t.__name__}")
             traceback.print_exc()

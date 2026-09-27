@@ -1,5 +1,4 @@
 """endurance_monitor 검증 — build_row 순수 로직 + mock HTTP 폴링.
-
     python tests/test_endurance_monitor.py
 """
 
@@ -13,7 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import endurance_monitor as em  # noqa: E402
+import endurance_monitor as em
 
 SAMPLE_METRICS = {
     "messages_received": 5000, "messages_dropped": 12, "drop_rate": 0.0024,
@@ -38,10 +37,10 @@ def test_build_row_aggregates():
     assert row["collect_latency_p95_ms"] == 244.0
     assert row["nodes_total"] == 3
     assert row["nodes_online"] == 2
-    assert row["total_lost_packets"] == 11         # 3+7+1
-    assert row["min_msg_rate_hz"] == 0.0           # offline 노드 포함 최저
-    assert row["mqtt_disconnect_count"] == 1        # 재연결 지표
-    assert set(row) == set(em.FIELDS)               # 컬럼 누락/초과 없음
+    assert row["total_lost_packets"] == 11
+    assert row["min_msg_rate_hz"] == 0.0
+    assert row["mqtt_disconnect_count"] == 1
+    assert set(row) == set(em.FIELDS)
 
 
 def test_build_row_handles_empty_on_fetch_fail():
@@ -52,7 +51,7 @@ def test_build_row_handles_empty_on_fetch_fail():
 
 
 class _Handler(BaseHTTPRequestHandler):
-    def log_message(self, *a):  # 조용히
+    def log_message(self, *a):
         pass
 
     def do_GET(self):
@@ -84,7 +83,7 @@ def test_poll_once_against_mock_server():
 
 
 def test_poll_once_records_failure_when_server_down():
-    row = em.poll_once("http://127.0.0.1:1", elapsed_s=5)  # 열려 있지 않은 포트
+    row = em.poll_once("http://127.0.0.1:1", elapsed_s=5)
     assert row["ok"] == 0
     assert "fetch 실패" in row["timestamp"]
 
@@ -98,7 +97,7 @@ if __name__ == "__main__":
         try:
             t()
             print(f"PASS {t.__name__}")
-        except Exception:  # noqa: BLE001
+        except Exception:
             failed += 1
             print(f"FAIL {t.__name__}")
             traceback.print_exc()

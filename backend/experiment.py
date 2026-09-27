@@ -1,12 +1,11 @@
 """실험 상태 관리자 + 장치 offset 계산 (최종 실험 로직).
 
-단일 세션이 아니라 두 상태를 분리해 관리한다:
+상태 분리 및 관리:
     _active_run          : 본 실험 회차. C1~C4 가 끊기지 않고 기록된다(자동 종료 없음).
     _active_test_segment : 이동 센서 T 의 2분 기록 구간(안정화 20s → 기록 120s → 완료).
 
 Offset 측정은 본 실험 Run 과 분리된 OffsetRun 으로 관리한다.
 샘플이 어느 Segment 에 속하는지는 in-memory 포인터가 아니라 저장된 시간 범위로 판정한다
-(MQTT 지연이 있어도 server_ts_ms 로 올바른 Segment 에 저장되도록).
 """
 
 from __future__ import annotations
@@ -27,7 +26,7 @@ DIRECTIONS = ("forward", "reverse")
 
 
 class Conflict(Exception):
-    """상태 위반 요청(중복 시작, 순서 위반 등). API 는 409 로 매핑한다."""
+    """상태 위반 요청(중복 시작, 순서 위반 등). API 409 매핑."""
 
 
 def now_ms() -> int:
@@ -38,7 +37,7 @@ def now_ms() -> int:
 class ActiveOffsetRun:
     offset_run_id: str
     experiment_id: str
-    phase: str            # pre | post
+    phase: str
     started_at_ms: int
 
     def to_dict(self) -> dict[str, Any]:
@@ -87,7 +86,7 @@ class ActiveTestSegment:
 
 
 class ExperimentManager:
-    """Run + TestSegment + OffsetRun 상태. MQTT 스레드와 HTTP 핸들러가 공유하므로 락으로 보호."""
+    """Run + TestSegment + OffsetRun 상태. MQTT 스레드와 HTTP 핸들러 공유 -> 락으로 보호."""
 
     def __init__(self, store: ExperimentStore) -> None:
         self.store = store
@@ -95,12 +94,11 @@ class ExperimentManager:
         self._experiment_id: str | None = None
         self._ap_bssid: str | None = None
         self._ap_channel: int | None = None
-        self._assignments: dict[str, tuple[str, str]] = {}  # node_id -> (point_id, role)
+        self._assignments: dict[str, tuple[str, str]] = {}
         self._active_run: ActiveRun | None = None
         self._active_test_segment: ActiveTestSegment | None = None
         self._active_offset: ActiveOffsetRun | None = None
 
-    # -- experiment ----------------------------------------------------
     @property
     def experiment_id(self) -> str | None:
         return self._experiment_id
@@ -115,8 +113,6 @@ class ExperimentManager:
 
     def start_experiment(self, experiment_id: str, ap_bssid: str | None,
                          ap_channel: int | None, note: str | None = None) -> dict[str, Any]:
-        # 이미 진행 중인 Run/Segment 가 있으면 조용히 덮어쓰지 않는다(§22).
-        # 고아 Run(DB running 잔존)을 막기 위해 열린 Run/Segment 를 interrupted 로 정리한다.
         interrupted = self.store.mark_all_open_interrupted(now_ms())
         if interrupted["runs"] or interrupted["segments"]:
             logger.warning("새 실험 시작 전 열린 Run/Segment 를 interrupted 로 정리: %s", interrupted)
@@ -154,7 +150,6 @@ class ExperimentManager:
             raise Conflict("실험이 시작되지 않았습니다.")
         return self._experiment_id
 
-    # -- 노드 배치 ------------------------------------------------------
     def assign(self, node_id: str, point_id: str, point_role: str) -> dict[str, Any]:
         exp = self._require_experiment()
         if point_role not in VALID_ROLES:
@@ -182,7 +177,6 @@ class ExperimentManager:
             found = self._assignments.get(node_id)
         return found[0] if found else None
 
-    # -- OffsetRun (사전/사후) -----------------------------------------
     def start_offset_run(self, phase: str = "pre", note: str | None = None) -> dict[str, Any]:
         exp = self._require_experiment()
         if phase not in ("pre", "post"):
@@ -212,7 +206,6 @@ class ExperimentManager:
         with self._lock:
             return self._active_offset
 
-    # -- 본 실험 Run ----------------------------------------------------
     def start_run(self, direction: str, pass_index: int,
                   pre_offset_run_id: str | None = None, note: str | None = None) -> dict[str, Any]:
         exp = self._require_experiment()
@@ -220,14 +213,12 @@ class ExperimentManager:
             raise ValueError(f"direction 은 {DIRECTIONS} 중 하나여야 합니다.")
         if not isinstance(pass_index, int) or pass_index < 1:
             raise ValueError("pass_index 는 1 이상의 정수여야 합니다.")
-        # 사전 Offset 이 지정되지 않으면, device_offset 계산이 끝난 최신 pre OffsetRun 을 고른다.
         if pre_offset_run_id is None:
             for orr in reversed(self.store.list_offset_runs(exp)):
                 if (orr["phase"] == "pre" and orr["status"] == "completed"
                         and self.store.list_device_offsets(exp, orr["offset_run_id"])):
                     pre_offset_run_id = orr["offset_run_id"]
                     break
-        # 사전 Offset 없이는 본 실험 Run 을 시작할 수 없다(corrected_rssi 근거가 없음).
         if pre_offset_run_id is None:
             raise Conflict("사전(pre) Offset 측정·계산을 먼저 완료하세요.")
         if not self.store.list_device_offsets(exp, pre_offset_run_id):
@@ -277,7 +268,6 @@ class ExperimentManager:
     def mark_run_interrupted(self, run_id: str) -> None:
         self.store.set_run_status(run_id, "interrupted", now_ms())
 
-    # -- TestSegment ---------------------------------------------------
     def prepare_test_segment(self, point_id: str, order_index: int,
                              stabilization_seconds: int, recording_seconds: int,
                              note: str | None = None) -> dict[str, Any]:
@@ -326,7 +316,7 @@ class ExperimentManager:
         if seg is None:
             return {"finished": False}
         if cur < seg.recording_ended_at_ms:
-            self.store.truncate_segment_recording(seg.segment_id, cur)  # 조기 종료: 창 절단
+            self.store.truncate_segment_recording(seg.segment_id, cur)
         self.store.set_segment_status(seg.segment_id, "completed", cur)
         logger.info("segment finish: %s", seg.point_id)
         return {"finished": True, "segment": seg.to_dict()}
@@ -345,7 +335,6 @@ class ExperimentManager:
 
     def auto_advance_segment(self) -> dict[str, Any] | None:
         """백그라운드 루프가 호출. 기록 종료 시각이 지나면 Segment 를 completed 로 자동 마감.
-
         Run 에는 자동 종료가 없다.
         """
         cur = now_ms()
@@ -358,10 +347,8 @@ class ExperimentManager:
         logger.info("segment auto-complete: %s", seg.point_id)
         return seg.to_dict()
 
-    # -- 저장 컨텍스트 판정 (MQTT 경로가 사용) --------------------------
     def context_at(self, node_id: str, server_ts_ms: int) -> dict[str, Any] | None:
         """이 노드의 이 시각 샘플을 어디에 저장할지 결정. 저장 대상이 아니면 None.
-
         - Run 없음 → None (본 실험 measurement 에 저장 안 함; JSONL 원본은 별도 보존)
         - calibration 노드 → run_id 항상, segment_id 는 시간이 기록 구간이면 함께
         - test 노드 → 기록 Segment 안일 때만 저장(이동·안정화 중이면 None)
@@ -380,12 +367,11 @@ class ExperimentManager:
             }
         if role == "test":
             if segment is None:
-                return None  # 이동·안정화 중 T 데이터는 Test 로 저장하지 않음
+                return None
             return {
                 "run_id": run.run_id, "segment_id": segment["segment_id"],
                 "point_id": segment["point_id"], "point_role": "test",
             }
-        # offset 역할 노드는 OffsetRun 경로에서 별도 처리
         return None
 
     def offset_context(self, node_id: str) -> dict[str, Any] | None:
@@ -400,16 +386,12 @@ class ExperimentManager:
                 "point_id": point_id, "point_role": "offset"}
 
 
-# 하위호환 별칭 (기존 import 를 깨지 않기 위해; main/mqtt 는 새 이름으로 전환 예정)
 SessionManager = ExperimentManager
 
 
-# 장치별 offset (계획서 §4.2):
-#   Δ_d = m_ref - m_d,  m_ref = median(모든 장치의 중앙값),  RSSI_corrected = RSSI + Δ_d
 def compute_device_offsets(store: ExperimentStore, experiment_id: str,
                            offset_run_id: str) -> dict[str, Any]:
     """지정 OffsetRun 의 offset 측정으로 장치 편차를 계산해 (offset_run_id, node) 로 저장.
-
     사전/사후를 각각 그 offset_run_id 로 저장하므로 사후가 사전값을 덮어쓰지 않는다.
     """
     rows = [

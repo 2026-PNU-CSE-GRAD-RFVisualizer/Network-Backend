@@ -228,10 +228,8 @@ def quality_check(rows, test_points, cal_window, pre_offsets, post_offsets, poin
         problems.append("사전(pre) 장치 offset 이 계산되지 않았습니다.")
     if not post_offsets:
         warnings.append("사후(post) 장치 offset 측정이 없습니다 — drift 를 확인할 수 없습니다.")
-    # drift 는 기록만 하고 임의 합격 임계값으로 실패시키지 않는다.
     drift = offset_drift(pre_offsets, post_offsets)
 
-    # 본 실험 Run 만 검사한다(Offset Run 은 direction='offset' 이라 제외).
     active_runs = [r for r in runs if r["direction"] in ("forward", "reverse")
                    and r["status"] in ("running", "completed")]
     for run in active_runs:
@@ -243,24 +241,20 @@ def quality_check(rows, test_points, cal_window, pre_offsets, post_offsets, poin
             problems.append(f"[{rid}] Test 위치 {len(pts)}개 (기대 {expected_test_points}) — 부족")
         elif len(pts) > expected_test_points:
             warnings.append(f"[{rid}] Test 위치 {len(pts)}개 (기대 {expected_test_points})")
-        # 방향 순서 (point_id 끝의 숫자를 사용: test-01 / T1 형식 모두 대응)
         nums = [int(m.group()) for p in pts if (m := re.search(r"\d+$", p))]
         if run["direction"] == "forward" and nums != sorted(nums):
             warnings.append(f"[{rid}] 정방향 순서가 오름차순이 아님: {pts}")
         if run["direction"] == "reverse" and nums != sorted(nums, reverse=True):
             warnings.append(f"[{rid}] 역방향 순서가 내림차순이 아님: {pts}")
-        # 시간 겹침
         spans = sorted((s["recording_started_at_ms"], s["recording_ended_at_ms"]) for s in segs)
         for a, b in zip(spans, spans[1:]):
             if b[0] < a[1]:
                 problems.append(f"[{rid}] TestSegment 시간이 겹칩니다.")
                 break
-        # 각 Segment 가 Run 시간 안에 있는가
         for s in segs:
             if run["ended_at_ms"] and s["recording_ended_at_ms"] > run["ended_at_ms"]:
                 warnings.append(f"[{rid}] Segment {s['segment_id']} 가 Run 종료 후까지 걸침")
 
-    # 각 완료 Segment 에 T 와 C1~C4 가 존재하는가
     tp_by_seg = {t["segment_id"] for t in test_points}
     cal_nodes_by_seg: dict[str, set[str]] = {}
     for c in cal_window:
@@ -271,14 +265,11 @@ def quality_check(rows, test_points, cal_window, pre_offsets, post_offsets, poin
         n_cal = len(cal_nodes_by_seg.get(s["segment_id"], set()))
         if s["segment_id"] not in tp_by_seg:
             problems.append(f"Segment {s['segment_id']}({s['point_id']}) 에 T 데이터가 없습니다.")
-        # 동시간 C1~C4 누락은 후처리를 못 하므로 실패 처리(경고 아님).
         if n_cal == 0:
             problems.append(f"Segment {s['segment_id']}({s['point_id']}) 에 동시간 C1~C4 데이터가 전혀 없습니다.")
         elif n_cal < expected_calibration_nodes:
             problems.append(f"Segment {s['segment_id']}({s['point_id']}) 에 C1~C4 중 {n_cal}개만 있습니다.")
 
-    # 좌표·BSSID·채널
-    # 좌표가 등록(point 테이블)되지 않았거나 0.0 등으로 비어 있으면 잡는다.
     registered = {p["point_id"] for p in points if p["pos_x"] is not None}
     missing_coords = sorted({t["point_id"] for t in test_points
                              if t["x"] is None or t["point_id"] not in registered})
@@ -296,13 +287,11 @@ def quality_check(rows, test_points, cal_window, pre_offsets, post_offsets, poin
     elif n_missing_ch:
         warnings.append(f"AP 채널이 비어 있는 측정 {n_missing_ch}건.")
 
-    # 샘플 부족(기대의 60% 미만)은 통계 신뢰도를 해치므로 실패 처리.
     low = [f'{t["point_id"]}={t["sample_count"]}' for t in test_points
            if t["sample_count"] < expected_samples * 0.6]
     if low:
         problems.append(f"샘플 수 부족(기대 {expected_samples}의 60% 미만): {', '.join(low)}")
 
-    # 노드별 최대 수신 공백(같은 Run 내 연속 server_ts 간격). 5초 초과 시 경고.
     max_gap = _max_receive_gap(used_rows)
     big_gaps = {n: g for n, g in max_gap.items() if g > 5000}
     if big_gaps:
@@ -355,15 +344,11 @@ def export_experiment(store: ExperimentStore, experiment_id: str,
     runs = store.list_runs(experiment_id)
     segments = [s for r in runs for s in store.list_test_segments(r["run_id"])]
 
-    # 사전/사후 Offset 분리 (사후는 재보정 안 함, drift 확인용)
     pre_run = store.latest_offset_run(experiment_id, "pre")
     post_run = store.latest_offset_run(experiment_id, "post")
     pre_offsets = store.list_device_offsets(experiment_id, pre_run["offset_run_id"]) if pre_run else []
     post_offsets = store.list_device_offsets(experiment_id, post_run["offset_run_id"]) if post_run else []
 
-    # 등록 좌표(point 테이블)가 정답. payload 좌표는 이동 노드에서 (0,0,0) 이므로 신뢰할 수 없다.
-    # 여기서 rows 를 보정하면 raw/summary/test_points 산출물이 한 번에 교정된다.
-    # 등록되지 않은 point_id 는 손대지 않으므로 legacy 행이 깨지지 않는다.
     coords = {p["point_id"]: p for p in points if p["pos_x"] is not None}
     for r in rows:
         p = coords.get(r["point_id"])
@@ -375,7 +360,6 @@ def export_experiment(store: ExperimentStore, experiment_id: str,
     cal_window = summarize_calibration_by_window(rows, segments)
     cal_points = summarize_calibration_points(rows)
 
-    # raw
     raw_rows = []
     for r in rows:
         item = dict(r)
@@ -383,7 +367,6 @@ def export_experiment(store: ExperimentStore, experiment_id: str,
         raw_rows.append(item)
     _write_csv(root / "raw" / "measurements_raw.csv", RAW_COLUMNS, raw_rows)
 
-    # processed
     _write_csv(root / "processed" / "measurements_summary.csv", SUMMARY_COLUMNS, summary)
     _write_csv(root / "processed" / "test_points.csv", TEST_POINT_COLUMNS, test_points)
     _write_csv(root / "processed" / "calibration_by_test_window.csv", CAL_WINDOW_COLUMNS, cal_window)
@@ -391,7 +374,6 @@ def export_experiment(store: ExperimentStore, experiment_id: str,
                ["run_id", "calibration_point_id", "node_id", "sample_count",
                 "median_filtered", "device_offset_db", "corrected_rssi", "x", "y", "z"], cal_points)
 
-    # config
     _write_csv(root / "config" / "points.csv",
                ["point_id", "point_role", "pos_x", "pos_y", "pos_z", "note"], points)
     (root / "config" / "device_offsets.json").write_text(

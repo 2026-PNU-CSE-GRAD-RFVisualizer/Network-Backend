@@ -1,8 +1,4 @@
-"""테스트용 가짜 뷰어 (핸드헬드 대역). 수신 fps·지연·seq 간격 출력.
 
-    python -m image_relay.fake_viewer --save-dir frames_out
-    python -m image_relay.fake_viewer --slow 0.5      # stale-drop 확인
-"""
 
 from __future__ import annotations
 
@@ -40,7 +36,7 @@ def main() -> None:
             n += 1
             latency = now_ms() - frame.ts_ms
             if last_seq is not None and frame.seq != last_seq + 1:
-                gaps += 1  # seq 건너뜀 = 서버가 버린 프레임
+                gaps += 1
             last_seq = frame.seq
             if args.save_dir:
                 with open(os.path.join(args.save_dir, f"frame_{frame.seq:06d}.jpg"), "wb") as f:

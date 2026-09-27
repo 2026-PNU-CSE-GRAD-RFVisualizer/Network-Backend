@@ -6,5 +6,4 @@
   - tests/test_pipeline_run.py    종단 저장(C1~C4 연속·T 기록창)
   - tests/test_export_run.py      Export/QC·동시간 매칭
 
-이 파일은 구 API(start_session 등)를 사용하므로 더 이상 실행하지 않는다.
 """

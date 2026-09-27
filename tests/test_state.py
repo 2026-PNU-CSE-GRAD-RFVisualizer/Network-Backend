@@ -1,4 +1,4 @@
-"""NodeRegistry(논문 실험에서도 사용) + WindowBuffer(9월 졸업작품 범위) 단위 테스트."""
+
 
 import time
 
@@ -14,8 +14,6 @@ def test_window_not_ready_immediately():
 
 
 def test_window_emits_after_window():
-    # 새 WindowBuffer 는 측정시각 버킷 + 유예(grace)+정지대기(stall) 후 확정한다.
-    # 확정 시각 = bucket + window + grace + stall = bucket + 600. 여유 있게 +700 에서 확인.
     wb = WindowBuffer(200)
     b = (now_ms() // 200) * 200
     wb.add({"node_id": "n1", "rssi": -54, "seq": 1, "timestamp": b}, b)
@@ -40,10 +38,10 @@ def test_packet_loss_counting():
     reg = NodeRegistry(5.0)
     reg.mark_seen("A", 1)
     reg.mark_seen("A", 2)
-    reg.mark_seen("A", 5)  # 3,4 손실
+    reg.mark_seen("A", 5)
     status, _ = reg.mark_seen("A", 6)
     assert status["lost_packets"] == 2
-    reg.mark_seen("A", 4)  # 과거 seq 무시
+    reg.mark_seen("A", 4)
     snap = [n for n in reg.snapshot() if n["node_id"] == "A"][0]
     assert snap["lost_packets"] == 2
 
@@ -51,9 +49,9 @@ def test_packet_loss_counting():
 def test_mark_seen_transition_flag():
     reg = NodeRegistry(5.0)
     _, became = reg.mark_seen("A", 1)
-    assert became is True  # 신규 -> online
+    assert became is True
     _, became2 = reg.mark_seen("A", 2)
-    assert became2 is False  # 계속 online
+    assert became2 is False
 
 
 def test_heartbeat_timeout():
